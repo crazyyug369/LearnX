@@ -1,0 +1,152 @@
+﻿app.post('/api/ai/adaptive-lesson', verifyToken, requireRole(['student']), validate(aiAdaptiveLessonSchema), async (req: any, res: any) => {
+  const { concept, subject, interest = 'Cricket & Sports', strategy = 'Analogy & Real-world', difficulty = 'Medium', prerequisite = '' } = req.body;
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const systemInstruction = `You are LearnX's AdaptiveAI tutor for a high school or college student.
+Task: Provide a personalized, clean, easy-to-understand lesson for the student.
+Format your response as a valid JSON object with:
+{
+  "title": "A catchy, engaging title connecting the target concept to the student's interest",
+  "coreConcept": "A crystal clear 2-3 sentence core definition without jargon",
+  "interestAnalogy": "A brilliant, intuitive analogy explaining the concept using the interest",
+  "keyTakeaways": ["Key bullet 1", "Key bullet 2", "Key bullet 3"],
+  "microExample": "A short, concrete problem or scenario solved step-by-step",
+  "checkYourUnderstanding": {
+    "question": "A quick conceptual check question",
+    "hint": "A subtle hint based on the analogy",
+    "answer": "Clear, encouraging explanation of the correct answer"
+  },
+  "strategyNote": "A brief note explaining why this teaching strategy was chosen for their current mastery state"
+}`;
+
+      const prompt = `Target Concept: "${concept}" in Subject "${subject}".
+Student Interest: "${interest}".
+Chosen Teaching Strategy: "${strategy}" (Options: Analogy & Real-world, Socratic/Questioning, Step-by-Step Visual Walkthrough, First Principles).
+Difficulty Level: "${difficulty}".
+Prerequisite Note: ${prerequisite ? `Student recently refreshed: ${prerequisite}` : 'Standard path'}.`;
+
+      const { text, model } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          temperature: 0.7,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      const validated = adaptiveLessonOutputSchema.parse(parsed);
+      return res.json({ success: true, data: validated, source: 'gemini', modelUsed: model });
+    } catch (err: any) {
+      console.info('Gemini generation using adaptive template fallback:', err?.message || 'timeout/busy');
+    }
+  }
+
+  // Fallback intelligent response if key is missing or model request fails
+  const fallbackAnalogy = interest.toLowerCase().includes('cricket') || interest.toLowerCase().includes('sport')
+    ? `Think of ${concept} just like a cricket captain setting the fielding placements according to the pitch bounce and bowler speed.`
+    : interest.toLowerCase().includes('game') || interest.toLowerCase().includes('sci-fi')
+    ? `Imagine ${concept} as an inventory management or respawn mechanic where each variable holds your health and loot stats.`
+    : interest.toLowerCase().includes('music')
+    ? `Just like rhythm and tempo organize complex musical notes into a harmonious melody, ${concept} orchestrates your data flow.`
+    : `In space exploration, ${concept} acts like gravitational orbital velocityâ€”keeping everything in stable equilibrium.`;
+
+  return res.json({
+    success: true,
+    source: 'adaptive_engine_fallback',
+    data: {
+      title: `${concept}: Mastered Through ${interest}`,
+      coreConcept: `${concept} is a fundamental pillar of ${subject}. It enables you to systematically break down complex relationships into predictable, solvable components.`,
+      interestAnalogy: fallbackAnalogy,
+      keyTakeaways: [
+        `Understand the core input and output dependencies before solving.`,
+        `Always verify edge cases against the underlying rule.`,
+        `Connect each step back to real-world intuitive dynamics.`,
+      ],
+      microExample: `Consider applying ${concept} to a standard 2-step scenario: first identify given constraints, then apply the formula/rule to derive the unknown value.`,
+      checkYourUnderstanding: {
+        question: `Why is identifying prerequisites critical before applying ${concept}?`,
+        hint: `Think about what happens if the foundation is incomplete.`,
+        answer: `Because every advanced step builds directly upon baseline mastery!`,
+      },
+      strategyNote: `Using ${strategy} to maximize conceptual retention and prevent cognitive overload.`,
+    },
+  });
+});
+
+// 2. AI Tutor & Struggle Detection Assistant API (Multilingual: English, Hindi, Gujarati with KaTeX math)
+function getMultilingualTutorFallback(params: {
+  concept: string;
+  interest: string;
+  language: string;
+  struggleDetected: boolean;
+  struggleReason?: string;
+  message?: string;
+}): string {
+  const { concept, interest, language, struggleDetected } = params;
+  const lang = (language || 'English').toLowerCase();
+  const cLower = (concept || '').toLowerCase();
+
+  // 1. Gujarati Fallbacks
+  if (lang.includes('gu') || lang.includes('gujarat')) {
+    if (cLower.includes('quadratic') || cLower.includes('root') || cLower.includes('equation')) {
+      return `àª¨àª®àª¸à«àª¤à«‡! àªšàª¾àª²à«‹ "${concept}" àª¨à«‡ àªàª•àª¦àª® àª¸àª°àª³ àª…àª¨à«‡ àªµà«àª¯àªµàª¸à«àª¥àª¿àª¤ àª°à«€àª¤à«‡ àª¸àª®àªœà«€àª:
+
+àªªà«àª°àª®àª¾àª£àª¿àª¤ àª¦à«àªµàª¿àª˜àª¾àª¤ àª¸àª®à«€àª•àª°àª£ (Standard Quadratic Equation) àª¨à«àª‚ àª¸à«àªµàª°à«‚àªª àª›à«‡:
+$$ax^2 + bx + c = 0$$
+àªœà«àª¯àª¾àª‚ $a, b, c$ àªµàª¾àª¸à«àª¤àªµàª¿àª• àª¸àª‚àª–à«àª¯àª¾àª“ àª›à«‡ àª…àª¨à«‡ $a \\neq 0$.
+
+àª¸àª®à«€àª•àª°àª£àª¨àª¾ àª‰àª•à«‡àª² àª…àª¥àªµàª¾ àª¬à«€àªœ (Roots) àª®à«‡àª³àªµàªµàª¾ àª®àª¾àªŸà«‡ àªªàª¹à«‡àª²àª¾ àªµàª¿àªµà«‡àªšàª• (Discriminant) àª¶à«‹àª§à«‹:
+$$\\Delta = b^2 - 4ac$$
+- **àªœà«‹ $\\Delta > 0$**: àª¬à«‡ àª­àª¿àª¨à«àª¨ àªµàª¾àª¸à«àª¤àªµàª¿àª• àª¬à«€àªœ àª®àª³à«‡.
+- **àªœà«‹ $\\Delta = 0$**: àª¸àª®àª¾àª¨ àªµàª¾àª¸à«àª¤àªµàª¿àª• àª¬à«€àªœ àª®àª³à«‡: $x = -\\frac{b}{2a}$.
+- **àªœà«‹ $\\Delta < 0$**: àª•à«‹àªˆ àªµàª¾àª¸à«àª¤àªµàª¿àª• àª¬à«€àªœ àª¨ àª®àª³à«‡ (àª•àª¾àª²à«àªªàª¨àª¿àª• àª¬à«€àªœ).
+
+àª¦à«àªµàª¿àª˜àª¾àª¤ àª¸à«‚àª¤à«àª° (Quadratic Formula):
+$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
+
+${struggleDetected ? `ðŸ’¡ *${interest} àª¨à«àª‚ àª‰àª¦àª¾àª¹àª°àª£*: àªœà«‡àª® ${interest} àª®àª¾àª‚ àª¬à«‹àª² àª•à«‡ àªªà«àª²à«‡àª¯àª°àª¨à«‹ àªŸà«àª°à«‡àªœà«‡àª•à«àªŸàª°à«€ àªªàª¾àª¥ àªªà«‡àª°àª¾àª¬à«‹àª²àª¾ (Parabola) àª¬àª¨àª¾àªµà«‡ àª›à«‡, àª¤à«‡àª® àª† àª¸à«‚àª¤à«àª° àª‰àªšà«àªšàª¤àª® àª¬àª¿àª‚àª¦à« àª…àª¨à«‡ àªœàª®à«€àª¨ àªªàª° àªªàª¡àªµàª¾àª¨à«‹ àª¸àª®àª¯ àª¶à«‹àª§àªµàª¾àª®àª¾àª‚ àª®àª¦àª¦ àª•àª°à«‡ àª›à«‡!` : 'àª¶à«àª‚ àª¤àª®à«‡ àª† àª¸à«‚àª¤à«àª° àª¸àª¾àª¥à«‡ àªàª• àª¸àª°àª³ àª‰àª¦àª¾àª¹àª°àª£ àª¦àª¾àª–àª²à«‹ àª—àª£àªµàª¾ àª®àª¾àª‚àª—à«‹ àª›à«‹?'}`;
+    }
+
+    if (cLower.includes('slope') || cLower.includes('linear') || cLower.includes('coordinate')) {
+      return `àª¨àª®àª¸à«àª¤à«‡! "${concept}" àªµàª¿àª¶à«‡ àªµàª¾àª¤ àª•àª°à«€àª:
+
+àª°à«‡àª–àª¾àª¨à«‹ àª¢àª¾àª³ (Slope $m$) àªàªŸàª²à«‡ àª•à«‡ àªŠàª‚àªšàª¾àªˆàª®àª¾àª‚ àª¥àª¤à«‹ àª«à«‡àª°àª«àª¾àª° (Rise) àª­àª¾àª—à«àª¯àª¾ àª†àª¡à«€ àª¦àª¿àª¶àª¾àª®àª¾àª‚ àª¥àª¤à«‹ àª«à«‡àª°àª«àª¾àª° (Run):
+$$m = \\frac{y_2 - y_1}{x_2 - x_1} = \\frac{\\Delta y}{\\Delta x}$$
+
+àªªà«àª°àª®àª¾àª£àª¿àª¤ àª°à«‡àª–àª¾ àª¸àª®à«€àª•àª°àª£ (Slope-Intercept Form):
+$$y = mx + c$$
+àªœà«àª¯àª¾àª‚ $m$ àª àª¢àª¾àª³ àª›à«‡ àª…àª¨à«‡ $c$ àª $y$-àª…àª•à«àª· àªªàª°àª¨à«‹ àª…àª‚àª¤àªƒàª–àª‚àª¡ (y-intercept) àª›à«‡.
+
+${struggleDetected ? `ðŸŽ¯ *${interest} àª¸àª¾àª¥à«‡ àª¸àª°àª–àª¾àª®àª£à«€*: ${interest} àª®àª¾àª‚ àª°àª¨-àª°à«‡àªŸ àª…àª¥àªµàª¾ àª¸à«àªªà«€àª¡ àªœà«‡àª® àªµàª§à«‡ àª•à«‡ àª˜àªŸà«‡ àª›à«‡, àª¤à«‡àª® àª¢àª¾àª³ $m$ àª—à«àª°àª¾àª«àª¨à«€ àªšàª¡àª¤à«€ àª•à«‡ àªŠàª¤àª°àª¤à«€ àª¦àª¿àª¶àª¾ àª¦àª°à«àª¶àª¾àªµà«‡ àª›à«‡.` : 'àª•à«‹àªˆ àªšà«‹àª•à«àª•àª¸ àª¬àª¿àª‚àª¦à«àª“ $(x_1, y_1)$ àª…àª¨à«‡ $(x_2, y_2)$ àª¨à«‹ àª¢àª¾àª³ àª¶à«‹àª§àªµà«‹ àª›à«‡?'}`;
+    }
+
+    if (cLower.includes('newton') || cLower.includes('friction') || cLower.includes('force')) {
+      return `àª¨àª®àª¸à«àª¤à«‡! àª­à«Œàª¤àª¿àª•àªµàª¿àªœà«àªžàª¾àª¨àª®àª¾àª‚ "${concept}" àª–à«‚àª¬ àª®àª¹àª¤à«àªµàª¨à«‹ àªµàª¿àª·àª¯ àª›à«‡:
+
+àª¨à«àª¯à«‚àªŸàª¨àª¨à«‹ àª—àª¤àª¿àª¨à«‹ àª¬à«€àªœà«‹ àª¨àª¿àª¯àª® (Newton's 2nd Law):
+$$\\vec{F}_{\\text{net}} = m \\cdot \\vec{a}$$
+àªœà«àª¯àª¾àª‚ $F$ àª àªªàª°àª¿àª£àª¾àª®à«€ àª¬àª³ (Force), $m$ àª àª¦àª³ (Mass), àª…àª¨à«‡ $a$ àª àªªà«àª°àªµà«‡àª— (Acceleration) àª›à«‡.
+
+àª˜àª°à«àª·àª£ àª¬àª³ (Friction Force):
+àª®àª¹àª¤à«àª¤àª® àª¸à«àª¥àª¿àª¤ àª˜àª°à«àª·àª£ $f_{s,\\max} = \\mu_s N$ àª…àª¨à«‡ àª—àª¤àª¿àª• àª˜àª°à«àª·àª£ $f_k = \\mu_k N$.
+
+${struggleDetected ? `ðŸ *${interest} àª¨à«àª‚ àª‰àª¦àª¾àª¹àª°àª£*: àªœà«àª¯àª¾àª°à«‡ àª–à«‡àª²àª¾àª¡à«€ àª®à«‡àª¦àª¾àª¨ àªªàª° àª¦à«‹àª¡à«‡ àª›à«‡ àª¤à«àª¯àª¾àª°à«‡ àªœà«‚àª¤àª¾ àª…àª¨à«‡ àª˜àª¾àª¸ àªµàªšà«àªšà«‡àª¨à«àª‚ àª˜àª°à«àª·àª£ àªœ àª¤à«‡àª¨à«‡ àª²àªªàª¸à«àª¯àª¾ àªµàª—àª° àª¦à«‹àª¡àªµàª¾àª®àª¾àª‚ àª®àª¦àª¦ àª•àª°à«‡ àª›à«‡.` : 'àª† àª¨àª¿àª¯àª® àªªàª° àª†àª§àª¾àª°àª¿àª¤ àª•à«‹àªˆ àªªà«àª°àª¶à«àª¨ àª›à«‡?'}`;
+    }
+
+    return `àª¨àª®àª¸à«àª¤à«‡! "${concept || 'àª† àªµàª¿àª·àª¯'}" àª¶à«€àª–àª¤à«€ àªµàª–àª¤à«‡ àª®àª¨àª®àª¾àª‚ àªªà«àª°àª¶à«àª¨à«‹ àªŠàª­àª¾ àª¥àªµàª¾ àª–à«‚àª¬ àªœ àª¸à«àªµàª¾àª­àª¾àªµàª¿àª• àª…àª¨à«‡ àª¸àª¾àª°à«‹ àª¸àª‚àª•à«‡àª¤ àª›à«‡.
+
+àª®à«‚àª³àª­à«‚àª¤ àª¨àª¿àª¯àª® àª¯àª¾àª¦ àª°àª¾àª–à«‹:
+1. àª†àªªà«‡àª² àªµàª¿àª—àª¤à«‹ àª…àª¨à«‡ àª•àª¿àª‚àª®àª¤à«‹ àª…àª²àª— àª¤àª¾àª°àªµà«‹.
+2. àª¯à«‹àª—à«àª¯ àª—àª¾àª£àª¿àª¤àª¿àª• àª¸à«‚àª¤à«àª° àªªàª¸àª‚àª¦ àª•àª°à«‹ (àªœà«‡àª® àª•à«‡ $y = mx + c$ àª…àª¥àªµàª¾ $\\vec{F} = m\\vec{a}$).
+3. àªªàª—àª²à«‡-àªªàª—àª²à«‡ àª—àª£àª¤àª°à«€ àª•àª°à«‹ àª…àª¨à«‡ àªàª•àª® (Units) àªšàª•àª¾àª¸à«‹.
+
+àª¤àª®àª¨à«‡ àª† àª•à«‹àª¨à«àª¸à«‡àªªà«àªŸàª®àª¾àª‚ àª•àª¯à«‹ àª­àª¾àª— àª¸à«Œàª¥à«€ àª…àª˜àª°à«‹ àª²àª¾àª—à«‡ àª›à«‡? àª®àª¨à«‡ àªœàª£àª¾àªµà«‹, àª¹à«àª‚ àªµàª¿àª—àª¤àªµàª¾àª° àª¸àª®àªœàª¾àªµà«€àª¶.`;
+  }
+
+  // 2. Hindi Fallbacks
+  if (lang.includes('hi') || lang.includes('hindi')) {

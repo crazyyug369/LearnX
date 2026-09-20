@@ -1,0 +1,557 @@
+﻿
+--- Lines 253 to 329 ---
+app.post('/api/ai/adaptive-lesson', validate(aiAdaptiveLessonSchema), async (req, res) => {
+  const { concept, subject, interest = 'Cricket & Sports', strategy = 'Analogy & Real-world', difficulty = 'Medium', prerequisite = '' } = req.body;
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const prompt = `You are LearnX's AdaptiveAI tutor for a high school or college student.
+Task: Provide a personalized, clean, easy-to-understand lesson for the student.
+Target Concept: "${concept}" in Subject "${subject}".
+Student Interest: "${interest}".
+Chosen Teaching Strategy: "${strategy}" (Options: Analogy & Real-world, Socratic/Questioning, Step-by-Step Visual Walkthrough, First Principles).
+Difficulty Level: "${difficulty}".
+Prerequisite Note: ${prerequisite ? `Student recently refreshed: ${prerequisite}` : 'Standard path'}.
+
+Format your response as a valid JSON object with:
+{
+  "title": "A catchy, engaging title connecting ${concept} to ${interest}",
+  "coreConcept": "A crystal clear 2-3 sentence core definition without jargon",
+  "interestAnalogy": "A brilliant, intuitive analogy explaining ${concept} using ${interest}",
+  "keyTakeaways": ["Key bullet 1", "Key bullet 2", "Key bullet 3"],
+  "microExample": "A short, concrete problem or scenario solved step-by-step",
+  "checkYourUnderstanding": {
+    "question": "A quick conceptual check question",
+    "hint": "A subtle hint based on the analogy",
+    "answer": "Clear, encouraging explanation of the correct answer"
+  },
+  "strategyNote": "A brief note explaining why this teaching strategy was chosen for their current mastery state"
+}`;
+
+      const { text, model } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.7,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      return res.json({ success: true, data: parsed, source: 'gemini', modelUsed: model });
+    } catch (err: any) {
+      console.info('Gemini generation using adaptive template fallback:', err?.message || 'timeout/busy');
+    }
+  }
+
+  // Fallback intelligent response if key is missing or model request fails
+  const fallbackAnalogy = interest.toLowerCase().includes('cricket') || interest.toLowerCase().includes('sport')
+    ? `Think of ${concept} just like a cricket captain setting the fielding placements according to the pitch bounce and bowler speed.`
+    : interest.toLowerCase().includes('game') || interest.toLowerCase().includes('sci-fi')
+    ? `Imagine ${concept} as an inventory management or respawn mechanic where each variable holds your health and loot stats.`
+    : interest.toLowerCase().includes('music')
+    ? `Just like rhythm and tempo organize complex musical notes into a harmonious melody, ${concept} orchestrates your data flow.`
+    : `In space exploration, ${concept} acts like gravitational orbital velocity—keeping everything in stable equilibrium.`;
+
+  return res.json({
+    success: true,
+    source: 'adaptive_engine_fallback',
+    data: {
+      title: `${concept}: Mastered Through ${interest}`,
+      coreConcept: `${concept} is a fundamental pillar of ${subject}. It enables you to systematically break down complex relationships into predictable, solvable components.`,
+      interestAnalogy: fallbackAnalogy,
+      keyTakeaways: [
+        `Understand the core input and output dependencies before solving.`,
+        `Always verify edge cases against the underlying rule.`,
+        `Connect each step back to real-world intuitive dynamics.`,
+      ],
+      microExample: `Consider applying ${concept} to a standard 2-step scenario: first identify given constraints, then apply the formula/rule to derive the unknown value.`,
+      checkYourUnderstanding: {
+        question: `Why is identifying prerequisites critical before applying ${concept}?`,
+        hint: `Think about what happens if the foundation is incomplete.`,
+        answer: `Because every advanced step builds directly upon baseline mastery!`,
+      },
+      strategyNote: `Using ${strategy} to maximize conceptual retention and prevent cognitive overload.`,
+    },
+  });
+});
+
+--- Lines 501 to 598 ---
+app.post('/api/ai/tutor-chat', validate(aiTutorChatSchema), async (req, res) => {
+  const message = req.body.message || req.body.userMessage || '';
+  const concept = req.body.concept || 'General Mathematics';
+  const struggleDetected = !!req.body.struggleDetected;
+  const struggleReason = req.body.struggleReason || 'Student inquiry';
+  const interest = req.body.interest || 'Cricket & Sports';
+  const language = req.body.language || 'English';
+  const history = req.body.history || [];
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      let languageInstructions = '';
+      const l = language.toLowerCase();
+
+      if (l.includes('gu') || l.includes('gujarat')) {
+        languageInstructions = `LANGUAGE MANDATE - CRITICAL:
+- You MUST respond in fluent, friendly Gujarati (ગુજરાતી) using standard Gujarati script.
+- Explain concepts warmly and encouragingly for an Indian school/college student.
+- For important technical terms, you may provide the English equivalent in parentheses for clarity, for example: દ્વિઘાત સમીકરણ (Quadratic Equation), વિવેચક (Discriminant), ઢાળ (Slope), પ્રવેગ (Acceleration), ઘર્ષણ (Friction).
+- CRITICAL: Keep all mathematical formulas, numbers, variables, and units formatted in standard LaTeX enclosed in $...$ or $$...$$ (do not transliterate mathematical variables like x, y, a, b into Gujarati letters; keep them as LaTeX math $x$, $y$, $a$).`;
+      } else if (l.includes('hi') || l.includes('hindi')) {
+        languageInstructions = `LANGUAGE MANDATE - CRITICAL:
+- You MUST respond in fluent, friendly Hindi (हिंदी) using standard Devanagari script.
+- Explain concepts warmly and encouragingly for an Indian school/college student.
+- For important technical terms, you may provide the English equivalent in parentheses for clarity, for example: द्विघात समीकरण (Quadratic Equation), विविक्तकर (Discriminant), ढाल (Slope), त्वरण (Acceleration), घर्षण (Friction).
+- CRITICAL: Keep all mathematical formulas, numbers, variables, and units formatted in standard LaTeX enclosed in $...$ or $$...$$ (do not transliterate mathematical variables like x, y, a, b into Devanagari; keep them as LaTeX math $x$, $y$, $a$).`;
+      } else {
+        languageInstructions = `LANGUAGE MANDATE:
+- Respond in clear, encouraging, friendly English.
+- Use accessible phrasing tailored for high school / college students.`;
+      }
+
+      const systemInstruction = `You are LearnX Adaptive Mentor, an empathetic, encouraging AI STEM tutor.
+Your goal is to build deep conceptual and mathematical mastery.
+Target Concept: "${concept}".
+Student Hobby / Interest: "${interest}".
+Struggle Status: ${struggleDetected ? `ALERT: Student is hesitating or struggling (${struggleReason}). Be patient, scaffold step-by-step, do not overwhelm.` : 'Normal active inquiry'}.
+
+${languageInstructions}
+
+EQUATION & FORMULA RENDERING MANDATE (CRITICAL):
+- ALWAYS format ALL mathematical symbols, equations, formulas, and expressions in valid LaTeX:
+  - For inline math, use single dollar signs: $ax^2 + bx + c = 0$, $\\Delta = b^2 - 4ac$, $m = \\frac{\\Delta y}{\\Delta x}$, $F = ma$.
+  - For major formulas, identities, or derivations, place them on their own lines wrapped in double dollar signs:
+    $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
+- The student's browser is powered by KaTeX and will automatically render every formula into beautiful typesetting. Never write unformatted equations like "x = (-b +- sqrt(b^2-4ac))/2a".
+
+STRUCTURE:
+- 2 to 4 concise, easy-to-read paragraphs or bullet points.
+- If struggle is detected, weave in a brief micro-analogy connected to ${interest}.
+- End with a gentle checking question or prompt for the next step.`;
+
+      const prompt = `Student says: "${message}"\nRecent context: ${JSON.stringify(history.slice(-3))}`;
+
+      const { text, model } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          temperature: 0.65,
+        },
+      });
+
+      if (text) {
+        return res.json({
+          success: true,
+          reply: text,
+          data: { reply: text },
+          source: 'gemini',
+          modelUsed: model,
+          language,
+        });
+      }
+    } catch (err: any) {
+      console.info('AI tutor using fallback mentor response:', err?.message || 'offline');
+    }
+  }
+
+  // Multilingual fallback reply with KaTeX equations
+  const reply = getMultilingualTutorFallback({
+    concept,
+    interest,
+    language,
+    struggleDetected,
+    struggleReason,
+    message,
+  });
+
+  return res.json({
+    success: true,
+    reply,
+    data: { reply },
+    source: 'adaptive_engine_fallback',
+    language,
+  });
+});
+
+--- Lines 601 to 656 ---
+app.post('/api/ai/generate-question', validate(aiGenerateQuestionSchema), async (req, res) => {
+  const { concept, subject, targetDifficulty = 'Medium', interest = 'Sports', previousIncorrect = false } = req.body;
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const prompt = `Generate 1 multiple choice question for a student learning "${concept}" in "${subject}".
+Target Difficulty: "${targetDifficulty}".
+Student Interest for real-world framing: "${interest}".
+${previousIncorrect ? 'The student had difficulty previously, so provide an intuitive question that tests the foundational concept with clear distractor explanations.' : 'Test applied mastery.'}
+
+Respond with valid JSON:
+{
+  "question": "Clear question text incorporating ${interest} where applicable",
+  "options": ["Option A", "Option B", "Option C", "Option D"],
+  "correctIndex": 0,
+  "explanation": "Why this option is correct and how to avoid the common pitfall",
+  "hint": "Gentle nudge without revealing the answer immediately",
+  "conceptTested": "${concept}"
+}`;
+
+      const { text } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.7,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      return res.json({ success: true, data: parsed });
+    } catch (err: any) {
+      console.info('Question generation using template fallback:', err?.message || 'busy');
+    }
+  }
+
+  return res.json({
+    success: true,
+    source: 'fallback',
+    data: {
+      question: `In the context of ${concept} applied to ${interest}, what is the primary factor that determines the rate of change?`,
+      options: [
+        'The difference between initial state and applied force / constraint',
+        'A constant value independent of all external parameters',
+        'Only the random noise in the measurement apparatus',
+        'The absolute total capacity regardless of inputs',
+      ],
+      correctIndex: 0,
+      explanation: `Correct! In ${concept}, changes are governed by the delta between initial conditions and the governing constraints.`,
+      hint: `Recall how adjusting inputs directly influences dynamic equilibrium.`,
+      conceptTested: concept,
+    },
+  });
+});
+
+--- Lines 791 to 882 ---
+app.post('/api/ai/mcq-guidance', validate(aiMcqGuidanceSchema), async (req, res) => {
+  const {
+    question,
+    conceptTitle,
+    selectedOption,
+    correctOption,
+    explanation,
+    hint = '',
+    subject = 'Mathematics',
+    interest = 'Cricket & Sports',
+    customFollowUp = '',
+  } = req.body;
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const prompt = `You are LearnX AdaptiveAI's Expert Socratic Math & Science Tutor.
+The student attempted a multiple-choice question and selected an INCORRECT option.
+Target Concept: "${conceptTitle}" (${subject})
+Student's Chosen Hobby/Interest: "${interest}"
+
+Question:
+"${question}"
+
+Student's Selected Incorrect Option:
+"${selectedOption}"
+
+Actual Correct Option:
+"${correctOption}"
+
+Curriculum Explanation:
+"${explanation}"
+
+Additional Hint:
+"${hint}"
+
+${customFollowUp ? `Student's Follow-up Request: "${customFollowUp}"` : ''}
+
+Your task: Provide empathetic, mathematically rigorous, Socratic guidance to remediate the student's misconception.
+CRITICAL FORMATTING MANDATE:
+- Whenever including ANY mathematical, chemical, physical, or algorithmic formula, variable, equation, or numerical calculation, ALWAYS enclose it in valid LaTeX formatting using single dollar signs for inline math (e.g. $ax^2 + bx + c = 0$, $b^2 - 4ac$, $x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$, $F = m \\cdot a$) or double dollar signs for block equations. This is necessary because KaTeX parses and renders your response!
+
+Respond with a strictly valid JSON object:
+{
+  "misconceptionAnalysis": "2 concise sentences analyzing the specific cognitive error or trap in '${selectedOption}' (e.g. sign confusion, reciprocal omission, failing to apply the square root).",
+  "stepByStepCorrection": [
+    "Step 1 with explicit LaTeX formula ($...$)",
+    "Step 2 with intermediate arithmetic computation ($...$)",
+    "Step 3 concluding with the correct result ($...$)"
+  ],
+  "keyFormulaLatex": "A clean KaTeX formula for this concept, e.g. x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+  "formulaName": "Name of the key formula / principle",
+  "socraticHint": "A targeted questioning prompt or mental check to prevent this mistake in future problems.",
+  "interestAnalogy": "A 1-2 sentence real-world analogy connecting this correction to ${interest}.",
+  "encouragingNote": "A warm, 1-sentence growth-mindset reinforcement."
+}`;
+
+      const { text, model } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.6,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      return res.json({ success: true, data: parsed, source: 'gemini', modelUsed: model });
+    } catch (err: any) {
+      console.info('MCQ guidance using smart concept-aware fallback:', err?.message || 'busy');
+    }
+  }
+
+  // Intelligent fallback with KaTeX formulas tailored to the concept and question
+  const fallbackGuidance = buildSmartMCQFallback({
+    question: question || '',
+    conceptTitle: conceptTitle || '',
+    selectedOption: selectedOption || '',
+    correctOption: correctOption || '',
+    explanation: explanation || '',
+    hint: hint || '',
+    subject: subject || '',
+    interest: interest || 'Cricket & Sports',
+  });
+
+  return res.json({
+    success: true,
+    source: 'adaptive_engine_fallback',
+    data: fallbackGuidance,
+  });
+});
+
+--- Lines 1825 to 1919 ---
+app.post('/api/curriculum/ai-suggest', validate(curriculumAiSuggestSchema), async (req, res) => {
+  const { title, subject = 'Mathematics', grade = 'Grade 10' } = req.body;
+  if (!title) {
+    return res.status(400).json({ success: false, error: 'Chapter or Concept title is required' });
+  }
+
+  // 1. Check local NCERT Curriculum DAG (29,000 nodes)
+  const dag = getNCERTDagData();
+  const recs = getNCERTRecsData();
+
+  let matchedDagNode: any = null;
+  const titleLower = title.toLowerCase().trim();
+
+  for (const [key, node] of Object.entries(dag)) {
+    if (key.toLowerCase() === titleLower || key.toLowerCase().includes(titleLower) || titleLower.includes(key.toLowerCase())) {
+      matchedDagNode = { title: key, ...node };
+      break;
+    }
+  }
+
+  let matchedRecs: string[] = [];
+  if (recs[title]) {
+    matchedRecs = recs[title].next_recommended_concepts || [];
+  } else if (matchedDagNode && recs[matchedDagNode.title]) {
+    matchedRecs = recs[matchedDagNode.title].next_recommended_concepts || [];
+  }
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const prompt = `You are the LearnX Senior Academic Curriculum Architect (aligned with NCERT / NEP 2020 frameworks).
+A teacher is adding a new chapter/concept node titled: "${title}" in "${subject}" (${grade}).
+${matchedDagNode ? `Found in NCERT Curriculum DAG: Prerequisites=[${matchedDagNode.prerequisites?.join(', ')}], Difficulty=${matchedDagNode.difficulty}` : ''}
+${matchedRecs.length > 0 ? `Recommended Next Concepts=[${matchedRecs.join(', ')}]` : ''}
+
+Provide pedagogical recommendations for this node in valid JSON:
+{
+  "category": "Curriculum Strand / Unit Name (e.g. Algebra, Kinematics, Organic Chemistry, Data Structures)",
+  "difficulty": "Beginner" | "Intermediate" | "Advanced",
+  "prerequisites": ["Prerequisite Concept 1", "Prerequisite Concept 2"],
+  "nextConcepts": ["Downstream Concept 1", "Downstream Concept 2"],
+  "tags": ["Tag1", "Tag2", "Tag3"],
+  "estimatedTimeMin": 25,
+  "description": "2-sentence pedagogical overview of core concepts covered in this chapter",
+  "pedagogicalRationale": "Why these prerequisite concepts are essential before attempting ${title}"
+}`;
+
+      const { text } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.5,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      if (parsed) {
+        return res.json({
+          success: true,
+          data: {
+            category: parsed.category || matchedDagNode?.subject || 'General',
+            difficulty: parsed.difficulty || matchedDagNode?.difficulty || 'Intermediate',
+            prerequisites: parsed.prerequisites || matchedDagNode?.prerequisites || [],
+            nextConcepts: parsed.nextConcepts || matchedRecs || [],
+            tags: parsed.tags || [subject, grade],
+            estimatedTimeMin: parsed.estimatedTimeMin || 25,
+            description: parsed.description || `Comprehensive study of ${title} for ${grade}.`,
+            pedagogicalRationale: parsed.pedagogicalRationale || 'Ensures solid cognitive grounding in fundamental prerequisite theorems.',
+            source: 'gemini_and_ncert_dag',
+          },
+        });
+      }
+    } catch (err: any) {
+      console.info('AI curriculum suggestion fallback to NCERT DAG:', err?.message || 'busy');
+    }
+  }
+
+  // Fallback to NCERT DAG if Gemini is offline
+  return res.json({
+    success: true,
+    data: {
+      category: matchedDagNode?.subject || 'General Unit',
+      difficulty: (matchedDagNode?.difficulty as any) || 'Intermediate',
+      prerequisites: matchedDagNode?.prerequisites || [],
+      nextConcepts: matchedRecs || [],
+      tags: [subject, grade, title],
+      estimatedTimeMin: 25,
+      description: `Comprehensive study of ${title} according to NCERT standard syllabus.`,
+      pedagogicalRationale: 'Prerequisite dependencies mapped from 29,000 NCERT pedagogical nodes.',
+      source: 'ncert_curriculum_dag',
+    },
+  });
+});
+
+--- Lines 2419 to 2491 ---
+app.post('/api/teacher/worksheet/generate', verifyToken, requireRole(['teacher', 'admin']), validate(teacherWorksheetGenerateSchema), async (req: any, res: any) => {
+  const { conceptTitle, subject, grade } = req.body;
+  if (!conceptTitle) {
+    return res.status(400).json({ success: false, error: 'conceptTitle is required' });
+  }
+
+  try {
+    // Attempt Gemini dynamic generation if client is available
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+    if (ai) {
+      try {
+        const prompt = `You are a master STEM pedagogue creating a 1-page remedial practice worksheet for high school students struggling with the curriculum concept: "${conceptTitle}" in ${subject || 'STEM'}.
+Provide clear LaTeX formatting with $...$ for inline equations and $$...$$ for display equations.
+Respond ONLY with valid JSON in this exact structure:
+{
+  "concept": "${conceptTitle}",
+  "problemStatementId": 207,
+  "date": "current date",
+  "sectionA": {
+    "title": "Section A: Visual & Intuitive Scaffold",
+    "analogy": "Deep intuitive explanation connecting abstract formulas to physical analogies..."
+  },
+  "sectionB": {
+    "title": "Section B: Guided Practice Problems",
+    "problems": [
+      {
+        "number": 1,
+        "tag": "Stepping Stone (Prerequisite)",
+        "prompt": "Problem 1 statement with LaTeX math...",
+        "answer": "Solution 1..."
+      },
+      {
+        "number": 2,
+        "tag": "Real-World Analogy",
+        "prompt": "Problem 2 statement with practical context...",
+        "answer": "Solution 2..."
+      },
+      {
+        "number": 3,
+        "tag": "Synthesis & Misconception Check",
+        "prompt": "Problem 3 deep reflection question...",
+        "answer": "Solution 3..."
+      }
+    ]
+  },
+  "answerKey": "Faculty Answer Key with concise numerical and symbolic solutions..."
+}`;
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
+        });
+
+        const text = response.text || '';
+        const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        return res.json({ success: true, worksheet: parsed });
+      } catch (aiErr) {
+        console.warn('Gemini worksheet generation fell back to curated template:', aiErr);
+      }
+    }
+
+    // Curated high-fidelity fallback with KaTeX equations
+    const worksheet = buildCuratedWorksheet(conceptTitle, subject, grade);
+    return res.json({ success: true, worksheet });
+  } catch (err: any) {
+    console.error('Error generating worksheet:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to generate worksheet' });
+  }
+});
+
+--- Lines 2918 to 2969 ---
+app.post('/api/admin/test-gemini', async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const settings = await getLiveSettings();
+    if (!settings.geminiEnabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'Gemini Engine is currently switched OFF in settings. Please toggle ON first.',
+      });
+    }
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+    if (!ai) {
+      return res.status(400).json({
+        success: false,
+        error: 'No Gemini API client configured. Please verify your API key.',
+      });
+    }
+
+    const testModel = req.body?.model || settings.geminiModel || 'gemini-2.5-flash';
+    const response = await ai.models.generateContent({
+      model: testModel,
+      contents: 'Respond with exactly the single word: OPERATIONAL',
+      config: { temperature: 0.1 },
+    });
+
+    const latencyMs = Date.now() - startTime;
+    const reply = response.text?.trim() || 'OPERATIONAL';
+
+    await logSystemAction({
+      action: 'TEST_GEMINI_PING',
+      actorName: req.body?.actorName || 'Admin',
+      details: { model: testModel, latencyMs, reply },
+    });
+
+    return res.json({
+      success: true,
+      latencyMs,
+      model: testModel,
+      reply,
+      statusText: `Google Gemini API responded successfully using ${testModel}.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      latencyMs: Date.now() - startTime,
+      error: err.message || 'Gemini ping failed',
+    });
+  }
+});

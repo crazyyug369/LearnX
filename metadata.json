@@ -1,0 +1,6 @@
+{
+  "name": "LearnX AdaptiveAI",
+  "description": "Adaptive AI personalized learning engine for students with real-time knowledge graphs, struggle detection, and mastery-based progression.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

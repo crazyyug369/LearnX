@@ -1,0 +1,566 @@
+@import "tailwindcss";
+@source "./**/*.{js,ts,jsx,tsx}";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  html {
+    transition: font-size 0.18s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease, color 0.2s ease;
+    scroll-behavior: smooth;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: #1c1917;
+    background-color: #faf9f5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.01em;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  html.dark body {
+    color: #f5f5f4;
+    background-color: #151514;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Outfit', sans-serif;
+    letter-spacing: -0.025em;
+  }
+}
+
+/* Font theme overrides */
+.theme-font-outfit,
+.theme-font-modern-sans {
+  font-family: 'Outfit', sans-serif;
+}
+
+.theme-font-jakarta {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+.theme-font-newsreader,
+.theme-font-editorial-serif {
+  font-family: 'Newsreader', Georgia, serif;
+}
+
+.theme-font-newsreader h1,
+.theme-font-newsreader h2,
+.theme-font-newsreader h3,
+.theme-font-editorial-serif h1,
+.theme-font-editorial-serif h2,
+.theme-font-editorial-serif h3,
+.font-serif {
+  font-family: 'Newsreader', Georgia, Cambria, serif;
+}
+
+/* Dyslexia-friendly typography mode */
+.font-dyslexic,
+.theme-font-lexend,
+.theme-font-dyslexic {
+  font-family: 'Lexend', sans-serif !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1.85 !important;
+  word-spacing: 0.08em !important;
+}
+
+/* High contrast mode */
+.high-contrast {
+  filter: contrast(1.2) saturate(1.05);
+}
+
+/* Tactile subtle grid texture for learning canvas */
+.editorial-canvas-bg {
+  background-color: #faf9f5;
+  background-image: radial-gradient(rgba(120, 113, 108, 0.1) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Custom animated flow for knowledge graph SVG connections */
+@keyframes graphDashFlow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.graph-edge-active {
+  stroke-dasharray: 6 4;
+  animation: graphDashFlow 1.8s linear infinite;
+}
+
+/* Subtle breathing glow for active learning node */
+@keyframes activeNodePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(17, 75, 67, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(17, 75, 67, 0);
+  }
+}
+
+.pulse-active-node {
+  animation: activeNodePulse 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d6d3d1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8a29e;
+}
+
+/* ==========================================================================
+   Dark Mode System Variables & Component Theming
+   ========================================================================== */
+
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark .editorial-canvas-bg {
+  background-color: #141413;
+  background-image: radial-gradient(rgba(214, 211, 209, 0.08) 1px, transparent 1px);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #3a3936;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #54524d;
+}
+
+/* Header, navigation and sticky bars in dark mode */
+html.dark header {
+  background-color: rgba(20, 20, 19, 0.95) !important;
+  border-bottom-color: #2b2a28 !important;
+}
+
+html.dark header .bg-stone-100\/60,
+html.dark header .bg-stone-100\/90 {
+  background-color: rgba(28, 28, 26, 0.85) !important;
+  border-color: #2b2a28 !important;
+}
+
+/* Base surface mapping in dark mode */
+html.dark .bg-white,
+html.dark .bg-white\/90,
+html.dark .bg-white\/95,
+html.dark .bg-white\/80,
+html.dark .bg-white\/70,
+html.dark .bg-white\/60,
+html.dark .bg-white\/50,
+html.dark .bg-\[\#FCFCFB\],
+html.dark .bg-\[\#FCFCFB\]\/95,
+html.dark .bg-\[\#FAF8F5\],
+html.dark .bg-\[\#FAF8F5\]\/60,
+html.dark .bg-\[\#FAF9F6\],
+html.dark .bg-\[\#FAF9F5\] {
+  background-color: #1c1c1a;
+}
+
+html.dark .bg-stone-50,
+html.dark .bg-stone-50\/40,
+html.dark .bg-stone-50\/70,
+html.dark .bg-stone-50\/90 {
+  background-color: #171716;
+}
+
+html.dark .bg-stone-50\/50,
+html.dark .bg-stone-50\/80 {
+  background-color: rgba(23, 23, 22, 0.8);
+}
+
+html.dark .bg-stone-100,
+html.dark .bg-stone-100\/60,
+html.dark .bg-stone-100\/70,
+html.dark .bg-stone-100\/80,
+html.dark .bg-stone-100\/90 {
+  background-color: #252422;
+}
+
+html.dark .bg-stone-200 {
+  background-color: #33322f;
+}
+
+html.dark .hover\:bg-stone-50:hover {
+  background-color: #222220;
+}
+
+html.dark .hover\:bg-stone-100:hover {
+  background-color: #2b2b28;
+}
+
+html.dark .hover\:bg-stone-200:hover {
+  background-color: #383734;
+}
+
+/* Borders in dark mode */
+html.dark .border-stone-100 {
+  border-color: #252422;
+}
+
+html.dark .border-stone-200,
+html.dark .border-stone-200\/60,
+html.dark .border-stone-200\/70,
+html.dark .border-stone-200\/80,
+html.dark .border-stone-200\/90 {
+  border-color: #2e2d2a;
+}
+
+html.dark .border-stone-300 {
+  border-color: #403e3a;
+}
+
+html.dark .divide-stone-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #252422;
+}
+
+html.dark .divide-stone-200 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #2e2d2a;
+}
+
+/* Typography & Text Contrast in dark mode */
+html.dark .text-stone-950,
+html.dark .text-stone-900 {
+  color: #f5f5f4;
+}
+
+html.dark .text-stone-800 {
+  color: #e7e5e4;
+}
+
+html.dark .text-stone-700 {
+  color: #d6d3d1;
+}
+
+html.dark .text-stone-600 {
+  color: #a8a29e;
+}
+
+html.dark .text-stone-500 {
+  color: #8c857f;
+}
+
+html.dark .text-stone-400 {
+  color: #78716c;
+}
+
+/* Math, LaTeX & KaTeX formulas in dark mode */
+html.dark .katex,
+html.dark .katex-display {
+  color: #f5f5f4 !important;
+}
+
+/* Input, select and dialog styling in dark mode */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  color: #f5f5f4;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #78716c;
+}
+
+html.dark select option {
+  background-color: #1c1c1a;
+  color: #f5f5f4;
+}
+
+html.dark button:disabled,
+html.dark input:disabled {
+  background-color: #252422 !important;
+  color: #78716c !important;
+  border-color: #33322f !important;
+}
+
+/* Elevated shadows in dark mode */
+html.dark .shadow-xs,
+html.dark .shadow-2xs,
+html.dark .shadow-sm,
+html.dark .shadow-md,
+html.dark .shadow-lg,
+html.dark .shadow-xl {
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
+}
+
+/* Tinted accents in dark mode */
+html.dark .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.1);
+}
+
+html.dark .border-emerald-200,
+html.dark .border-emerald-300 {
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+html.dark .text-emerald-900,
+html.dark .text-emerald-800,
+html.dark .text-emerald-700 {
+  color: #34d399;
+}
+
+html.dark .bg-amber-50,
+html.dark .bg-amber-100 {
+  background-color: rgba(245, 158, 11, 0.12);
+}
+
+html.dark .border-amber-200,
+html.dark .border-amber-300 {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+html.dark .text-amber-900,
+html.dark .text-amber-800,
+html.dark .text-amber-700 {
+  color: #fbbf24;
+}
+
+html.dark .bg-rose-50 {
+  background-color: rgba(244, 63, 94, 0.12);
+}
+
+html.dark .border-rose-200 {
+  border-color: rgba(244, 63, 94, 0.28);
+}
+
+html.dark .text-rose-900,
+html.dark .text-rose-800,
+html.dark .text-rose-700 {
+  color: #fb7185;
+}
+
+html.dark .bg-teal-50 {
+  background-color: rgba(20, 184, 166, 0.12);
+}
+
+html.dark .border-teal-200 {
+  border-color: rgba(20, 184, 166, 0.28);
+}
+
+html.dark .text-teal-900,
+html.dark .text-teal-800 {
+  color: #2dd4bf;
+}
+
+/* Node pulse in dark mode */
+@keyframes activeNodePulseDark {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(45, 212, 191, 0);
+  }
+}
+
+html.dark .pulse-active-node {
+  animation: activeNodePulseDark 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Primary Dark Button Contrast in Dark Mode */
+html.dark button.bg-stone-900:not([class*="dark:bg-"]),
+html.dark a.bg-stone-900:not([class*="dark:bg-"]) {
+  background-color: #f5f5f4;
+  color: #1c1917;
+}
+
+html.dark button.bg-stone-900:not([class*="dark:bg-"]):hover,
+html.dark a.bg-stone-900:not([class*="dark:bg-"]):hover {
+  background-color: #e7e5e4;
+  color: #171615;
+}
+
+/* Brand Accent Adaptations in Dark Mode */
+html.dark .bg-\[\#114B43\],
+html.dark .bg-\[\#114b43\] {
+  background-color: #196056;
+}
+
+html.dark .text-\[\#114B43\],
+html.dark .text-\[\#114b43\] {
+  color: #34d399;
+}
+
+html.dark .border-\[\#114B43\],
+html.dark .border-\[\#114b43\] {
+  border-color: #2dd4bf;
+}
+
+html.dark .bg-\[\#114B43\]\/5,
+html.dark .bg-\[\#114b43\]\/5,
+html.dark .bg-\[\#114B43\]\/10,
+html.dark .bg-\[\#114b43\]\/10,
+html.dark .bg-\[\#114B43\]\/15,
+html.dark .bg-\[\#114b43\]\/15 {
+  background-color: rgba(52, 211, 153, 0.14) !important;
+}
+
+html.dark .border-\[\#114B43\]\/20,
+html.dark .border-\[\#114b43\]\/20,
+html.dark .border-\[\#114B43\]\/30,
+html.dark .border-\[\#114b43\]\/30 {
+  border-color: rgba(52, 211, 153, 0.35) !important;
+}
+
+html.dark .bg-\[\#1C1917\],
+html.dark .bg-\[\#1c1917\] {
+  background-color: #2b2a27;
+  border-color: #3d3b37;
+}
+
+/* Knowledge Graph SVG Dark Mode Adaptations */
+html.dark #graph-dots circle {
+  fill: #2a2927;
+}
+
+html.dark #arrow-locked path {
+  fill: #44403c;
+}
+
+html.dark #arrow-mastered path {
+  fill: #34d399;
+}
+
+html.dark #edge-gradient-mastered stop[offset="100%"] {
+  stop-color: #34d399;
+}
+
+html.dark #edge-gradient-mastered stop[offset="0%"] {
+  stop-color: #10b981;
+}
+
+html.dark svg path[stroke="#FFFFFF"] {
+  stroke: #1c1c1a !important;
+}
+
+html.dark svg g rect[rx="12"] {
+  fill: #222220;
+  stroke: #33322f;
+}
+
+html.dark svg g text[fill="#292524"] {
+  fill: #f5f5f4;
+}
+
+html.dark circle[stroke="#E7E5E0"] {
+  stroke: #2e2d2a;
+}
+
+html.dark circle[stroke="#D6D3D1"] {
+  stroke: #383734;
+}
+
+html.dark circle[fill="#FFFFFF"] {
+  fill: #222220;
+}
+
+html.dark circle[fill="#ECFDF5"] {
+  fill: #064e3b;
+}
+
+html.dark circle[fill="#FFF1F2"] {
+  fill: #881337;
+}
+
+html.dark text[fill="#065F46"] {
+  fill: #6ee7b7;
+}
+
+html.dark text[fill="#9F1239"] {
+  fill: #fda4af;
+}
+
+/* Recharts Dark Mode Gridlines & Text */
+html.dark .recharts-cartesian-grid line {
+  stroke: #2e2d2a !important;
+}
+
+html.dark .recharts-polar-grid line,
+html.dark .recharts-polar-grid circle,
+html.dark .recharts-polar-grid polygon {
+  stroke: #2e2d2a !important;
+}
+
+html.dark .recharts-text {
+  fill: #a8a29e !important;
+}
+
+/* Comprehensive Dark Mode Input & Select Overrides */
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark select,
+html.dark textarea {
+  background-color: #242320 !important;
+  border-color: #3d3b37 !important;
+  color: #f5f5f4 !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #78716c !important;
+}
+
+html.dark select option {
+  background-color: #1c1c1a !important;
+  color: #f5f5f4 !important;
+}
+
+/* Background hex overrides */
+html.dark .bg-\[\#FAF9F6\],
+html.dark .bg-\[\#faf9f6\],
+html.dark .bg-\[\#FAF8F5\],
+html.dark .bg-\[\#FAF8F5\]\/60,
+html.dark .bg-\[\#FCFCFB\],
+html.dark .bg-\[\#FCFCFB\]\/95 {
+  background-color: #181816 !important;
+}
+
+/* Footer in Dark Mode */
+html.dark footer {
+  background-color: #141413 !important;
+  border-top-color: #2b2a28 !important;
+}
+
+/* Modal Dialog Popups in Dark Mode */
+html.dark .fixed.inset-0 .bg-white {
+  background-color: #1c1c1a !important;
+  border-color: #33322f !important;
+}
+
+/* Status Badges in Dark Mode */
+html.dark .bg-emerald-100 {
+  background-color: rgba(16, 185, 129, 0.2) !important;
+}
+
+html.dark .text-emerald-800 {
+  color: #6ee7b7 !important;
+}
+
+html.dark .bg-rose-100 {
+  background-color: rgba(244, 63, 94, 0.2) !important;
+}
+
+html.dark .text-rose-800 {
+  color: #fda4af !important;
+}
+
+
+

@@ -1,0 +1,959 @@
+[
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/health",
+    "line": 127,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/ai/adaptive-lesson",
+    "line": 235,
+    "bodyFields": [
+      "concept",
+      "subject",
+      "interest",
+      "strategy",
+      "difficulty",
+      "prerequisite"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": true,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/ai/tutor-chat",
+    "line": 483,
+    "bodyFields": [
+      "message",
+      "userMessage",
+      "concept",
+      "struggleDetected",
+      "struggleReason",
+      "interest",
+      "language",
+      "history"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": true,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/ai/generate-question",
+    "line": 583,
+    "bodyFields": [
+      "concept",
+      "subject",
+      "targetDifficulty",
+      "interest",
+      "previousIncorrect"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": true,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/ai/mcq-guidance",
+    "line": 773,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": true,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/quiz/questions",
+    "line": 1513,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "student",
+      "teacher",
+      "admin"
+    ],
+    "invokesAI": true,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/quiz/submit-attempt",
+    "line": 1610,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "student"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/student/quiz-attempts/:userId",
+    "line": 1658,
+    "bodyFields": [],
+    "queryFields": [
+      "limit"
+    ],
+    "paramFields": [
+      "userId"
+    ],
+    "roles": [
+      "student",
+      "teacher",
+      "admin",
+      "institution"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/diagnostic/questions",
+    "line": 1681,
+    "bodyFields": [],
+    "queryFields": [
+      "grade",
+      "subject"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/diagnostic/calibrate",
+    "line": 1698,
+    "bodyFields": [
+      "userId",
+      "grade",
+      "subject",
+      "answers"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/curriculum",
+    "line": 1723,
+    "bodyFields": [],
+    "queryFields": [
+      "subject",
+      "grade"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/curriculum",
+    "line": 1752,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "DELETE",
+    "path": "/api/curriculum/:id",
+    "line": 1795,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/curriculum/ai-suggest",
+    "line": 1807,
+    "bodyFields": [
+      "title",
+      "subject",
+      "grade"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": true,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/institutions/verify-code/:code",
+    "line": 2002,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "code"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/users/:userId/progress",
+    "line": 2026,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "userId"
+    ],
+    "roles": [
+      "student",
+      "teacher",
+      "admin",
+      "institution"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "PUT",
+    "path": "/api/users/:userId/progress",
+    "line": 2051,
+    "bodyFields": [
+      "conceptsMap",
+      "overallMastery",
+      "strugglingConcept",
+      "status",
+      "streakCount",
+      "interest"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "student",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "PATCH",
+    "path": "/api/users/:userId/profile",
+    "line": 2076,
+    "bodyFields": [
+      "interest",
+      "grade",
+      "name",
+      "streakCount",
+      "avatar"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "student",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/students",
+    "line": 2101,
+    "bodyFields": [],
+    "queryFields": [
+      "grade",
+      "status",
+      "search",
+      "interest",
+      "sortBy"
+    ],
+    "paramFields": [],
+    "roles": [
+      "teacher",
+      "institution",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/teacher/worksheet/generate",
+    "line": 2401,
+    "bodyFields": [
+      "conceptTitle",
+      "subject",
+      "grade"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "teacher",
+      "admin"
+    ],
+    "invokesAI": true,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/teacher/analytics/bottlenecks",
+    "line": 2476,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "teacher",
+      "institution",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/teacher/interventions/deploy",
+    "line": 2488,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "teacher",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/students",
+    "line": 2512,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [
+      "teacher",
+      "institution",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "PATCH",
+    "path": "/api/students/:id",
+    "line": 2609,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [
+      "teacher",
+      "institution",
+      "admin"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "DELETE",
+    "path": "/api/students/:id",
+    "line": 2639,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [
+      "admin",
+      "institution",
+      "teacher"
+    ],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/stats",
+    "line": 2665,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/users",
+    "line": 2687,
+    "bodyFields": [],
+    "queryFields": [
+      "search",
+      "role",
+      "grade",
+      "status",
+      "interest",
+      "sortBy",
+      "page",
+      "limit"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/admin/users",
+    "line": 2707,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "PUT",
+    "path": "/api/admin/users/:id",
+    "line": 2720,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "DELETE",
+    "path": "/api/admin/users/:id",
+    "line": 2733,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/institutions",
+    "line": 2745,
+    "bodyFields": [],
+    "queryFields": [
+      "search",
+      "status",
+      "page",
+      "limit"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/admin/institutions",
+    "line": 2761,
+    "bodyFields": [
+      "code",
+      "name",
+      "email"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/institutions/:id",
+    "line": 2778,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "PUT",
+    "path": "/api/admin/institutions/:id",
+    "line": 2791,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "DELETE",
+    "path": "/api/admin/institutions/:id",
+    "line": 2804,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/institutions/:id/members",
+    "line": 2814,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/admin/institutions/:id/members",
+    "line": 2824,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "DELETE",
+    "path": "/api/admin/institutions/:id/members/:userId",
+    "line": 2837,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id",
+      "userId"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/settings",
+    "line": 2847,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/admin/settings",
+    "line": 2857,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/admin/test-gemini",
+    "line": 2900,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": true,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/questions",
+    "line": 2954,
+    "bodyFields": [],
+    "queryFields": [
+      "search",
+      "subject",
+      "grade",
+      "difficulty"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/admin/questions",
+    "line": 2970,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "DELETE",
+    "path": "/api/admin/questions/:id",
+    "line": 2980,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "id"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/admin/audit-logs",
+    "line": 2990,
+    "bodyFields": [],
+    "queryFields": [
+      "limit"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/registry",
+    "line": 3022,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/bkt",
+    "line": 3076,
+    "bodyFields": [],
+    "queryFields": [
+      "search"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "POST",
+    "path": "/api/models/bkt/trace",
+    "line": 3109,
+    "bodyFields": [
+      "skillName",
+      "answers",
+      "initialPrior"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/dag/stats",
+    "line": 3161,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/dag/search",
+    "line": 3204,
+    "bodyFields": [],
+    "queryFields": [
+      "q",
+      "subject",
+      "grade",
+      "limit"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/dag/node/:conceptTitle",
+    "line": 3249,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "conceptTitle"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/recommendations/:conceptTitle",
+    "line": 3278,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [
+      "conceptTitle"
+    ],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "/api/models/dataset/search",
+    "line": 3333,
+    "bodyFields": [],
+    "queryFields": [
+      "q",
+      "limit"
+    ],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "server.ts",
+    "method": "GET",
+    "path": "*",
+    "line": 3411,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "POST",
+    "path": "/login",
+    "line": 46,
+    "bodyFields": [
+      "email",
+      "name",
+      "role",
+      "grade",
+      "interest",
+      "studentId",
+      "institution",
+      "institutionId",
+      "institutionCode",
+      "department",
+      "teacherId",
+      "email",
+      "password"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "POST",
+    "path": "/register",
+    "line": 93,
+    "bodyFields": [
+      "email",
+      "name",
+      "role",
+      "grade",
+      "interest",
+      "studentId",
+      "institution",
+      "institutionId",
+      "institutionCode",
+      "department",
+      "teacherId",
+      "name",
+      "email",
+      "password",
+      "role"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "POST",
+    "path": "/institution-login",
+    "line": 128,
+    "bodyFields": [
+      "code",
+      "email",
+      "password",
+      "email",
+      "password"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "POST",
+    "path": "/claim-password",
+    "line": 167,
+    "bodyFields": [
+      "email",
+      "newPassword"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "POST",
+    "path": "/logout",
+    "line": 198,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "GET",
+    "path": "/me",
+    "line": 203,
+    "bodyFields": [],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": true
+  },
+  {
+    "file": "src/auth.ts",
+    "method": "POST",
+    "path": "/forgot-password",
+    "line": 209,
+    "bodyFields": [
+      "email"
+    ],
+    "queryFields": [],
+    "paramFields": [],
+    "roles": [],
+    "invokesAI": false,
+    "requiresAuth": false
+  }
+]

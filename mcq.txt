@@ -1,0 +1,170 @@
+﻿app.post('/api/ai/mcq-guidance', verifyToken, requireRole(['student']), validate(aiMcqGuidanceSchema), async (req: any, res: any) => {
+  const {
+    question,
+    conceptTitle,
+    selectedOption,
+    correctOption,
+    explanation,
+    hint = '',
+    subject = 'Mathematics',
+    interest = 'Cricket & Sports',
+    customFollowUp = '',
+  } = req.body;
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const systemInstruction = `You are LearnX AdaptiveAI's Expert Socratic Math & Science Tutor.
+Your task: Provide empathetic, mathematically rigorous, Socratic guidance to remediate the student's misconception.
+CRITICAL FORMATTING MANDATE:
+- Whenever including ANY mathematical, chemical, physical, or algorithmic formula, variable, equation, or numerical calculation, ALWAYS enclose it in valid LaTeX formatting using single dollar signs for inline math (e.g. $ax^2 + bx + c = 0$, $b^2 - 4ac$, $x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$, $F = m \\cdot a$) or double dollar signs for block equations. This is necessary because KaTeX parses and renders your response!
+
+Respond with a strictly valid JSON object:
+{
+  "misconceptionAnalysis": "2 concise sentences analyzing the specific cognitive error or trap in the selected option (e.g. sign confusion, reciprocal omission, failing to apply the square root).",
+  "stepByStepCorrection": [
+    "Step 1 with explicit LaTeX formula ($...$)",
+    "Step 2 with intermediate arithmetic computation ($...$)",
+    "Step 3 concluding with the correct result ($...$)"
+  ],
+  "keyFormulaLatex": "A clean KaTeX formula for this concept, e.g. x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+  "formulaName": "Name of the key formula / principle",
+  "socraticHint": "A targeted questioning prompt or mental check to prevent this mistake in future problems.",
+  "interestAnalogy": "A 1-2 sentence real-world analogy connecting this correction.",
+  "encouragingNote": "A warm, 1-sentence growth-mindset reinforcement."
+}`;
+
+      const prompt = `Target Concept: "${conceptTitle}" (${subject})
+Student's Chosen Hobby/Interest: "${interest}"
+
+Question:
+"${question}"
+
+Student's Selected Incorrect Option:
+"${selectedOption}"
+
+Actual Correct Option:
+"${correctOption}"
+
+Curriculum Explanation:
+"${explanation}"
+
+Additional Hint:
+"${hint}"
+
+${customFollowUp ? `Student's Follow-up Request: "${customFollowUp}"` : ''}`;
+
+      const { text, model } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          temperature: 0.6,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      const validated = mcqGuidanceOutputSchema.parse(parsed);
+      return res.json({ success: true, data: validated, source: 'gemini', modelUsed: model });
+    } catch (err: any) {
+      console.info('MCQ guidance using smart concept-aware fallback:', err?.message || 'busy');
+    }
+  }
+
+  // Intelligent fallback with KaTeX formulas tailored to the concept and question
+  const fallbackGuidance = buildSmartMCQFallback({
+    question: question || '',
+    conceptTitle: conceptTitle || '',
+    selectedOption: selectedOption || '',
+    correctOption: correctOption || '',
+    explanation: explanation || '',
+    hint: hint || '',
+    subject: subject || '',
+    interest: interest || 'Cricket & Sports',
+  });
+
+  return res.json({
+    success: true,
+    source: 'adaptive_engine_fallback',
+    data: fallbackGuidance,
+  });
+});
+
+// ================= NCERT CURRICULUM DAG & DYNAMIC QUIZ SYSTEM =================
+
+// NCERT DAG and recommendation models (29,000 nodes) with non-blocking async warming
+let ncertDagCache: Record<string, any> = {};
+let ncertRecsCache: Record<string, any> = {};
+let ncertDagLoaded = false;
+let ncertRecsLoaded = false;
+let csvRecsCache: Record<string, string[]> | null = null;
+
+function getCSVRecommendations(): Record<string, string[]> {
+  if (!csvRecsCache) {
+    csvRecsCache = {};
+    try {
+      const csvPath = path.join(process.cwd(), 'models', 'curriculum_recommendation_preview.csv');
+      if (fs.existsSync(csvPath)) {
+        const text = fs.readFileSync(csvPath, 'utf8');
+        const lines = text.split('\n');
+        for (let i = 1; i < lines.length; i++) {
+          const parts = lines[i].split(',');
+          if (parts.length >= 4) {
+            const topic = parts[0].trim();
+            const recs = parts.slice(3).map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+            if (topic) csvRecsCache[topic.toLowerCase()] = recs;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not parse curriculum_recommendation_preview.csv:', e);
+    }
+  }
+  return csvRecsCache || {};
+}
+
+function getNCERTDagData(): Record<string, any> {
+  return ncertDagCache;
+}
+
+function getNCERTRecsData(): Record<string, any> {
+  return ncertRecsCache;
+}
+
+function startModelWarming() {
+  setTimeout(async () => {
+    try {
+      const recsPath = path.join(process.cwd(), 'models', 'ncert_next_concept_recs.json');
+      if (fs.existsSync(recsPath)) {
+        const content = await fs.promises.readFile(recsPath, 'utf8');
+        ncertRecsCache = JSON.parse(content);
+        ncertRecsLoaded = true;
+        console.log(`[Models] NCERT Next-Concept Recommender warmed: ${Object.keys(ncertRecsCache).length} pathways.`);
+      }
+    } catch (e) {
+      console.warn('Async recs load notice:', e);
+    }
+
+    try {
+      const dagPath = path.join(process.cwd(), 'models', 'ncert_curriculum_dag.json');
+      if (fs.existsSync(dagPath)) {
+        const content = await fs.promises.readFile(dagPath, 'utf8');
+        ncertDagCache = JSON.parse(content);
+        ncertDagLoaded = true;
+        console.log(`[Models] NCERT Curriculum DAG warmed: ${Object.keys(ncertDagCache).length} nodes.`);
+      }
+    } catch (e) {
+      console.warn('Async dag load notice:', e);
+    }
+  }, 200);
+}
+
+function buildFallbackBloomsQuestions(
+  conceptTitle: string,
+  conceptId: string,
+  interest: string,
+  _subject: string
+) {
+  const cLower = conceptTitle.toLowerCase();

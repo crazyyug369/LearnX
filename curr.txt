@@ -1,0 +1,138 @@
+﻿app.post('/api/curriculum/ai-suggest', validate(curriculumAiSuggestSchema), async (req, res) => {
+  const { title, subject = 'Mathematics', grade = 'Grade 10' } = req.body;
+  if (!title) {
+    return res.status(400).json({ success: false, error: 'Chapter or Concept title is required' });
+  }
+
+  // 1. Check local NCERT Curriculum DAG (29,000 nodes)
+  const dag = getNCERTDagData();
+  const recs = getNCERTRecsData();
+
+  let matchedDagNode: any = null;
+  const titleLower = title.toLowerCase().trim();
+
+  for (const [key, node] of Object.entries(dag)) {
+    if (key.toLowerCase() === titleLower || key.toLowerCase().includes(titleLower) || titleLower.includes(key.toLowerCase())) {
+      matchedDagNode = { title: key, ...node };
+      break;
+    }
+  }
+
+  let matchedRecs: string[] = [];
+  if (recs[title]) {
+    matchedRecs = recs[title].next_recommended_concepts || [];
+  } else if (matchedDagNode && recs[matchedDagNode.title]) {
+    matchedRecs = recs[matchedDagNode.title].next_recommended_concepts || [];
+  }
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      const systemInstruction = `You are the LearnX Senior Academic Curriculum Architect (aligned with NCERT / NEP 2020 frameworks).
+Provide pedagogical recommendations for this node in valid JSON:
+{
+  "category": "Curriculum Strand / Unit Name (e.g. Algebra, Kinematics, Organic Chemistry, Data Structures)",
+  "difficulty": "Beginner" | "Intermediate" | "Advanced",
+  "prerequisites": ["Prerequisite Concept 1", "Prerequisite Concept 2"],
+  "nextConcepts": ["Downstream Concept 1", "Downstream Concept 2"],
+  "tags": ["Tag1", "Tag2", "Tag3"],
+  "estimatedTimeMin": 25,
+  "description": "2-sentence pedagogical overview of core concepts covered in this chapter",
+  "pedagogicalRationale": "Why these prerequisite concepts are essential before attempting the concept"
+}`;
+
+      const prompt = `A teacher is adding a new chapter/concept node titled: "${title}" in "${subject}" (${grade}).
+${matchedDagNode ? `Found in NCERT Curriculum DAG: Prerequisites=[${matchedDagNode.prerequisites?.join(', ')}], Difficulty=${matchedDagNode.difficulty}` : ''}
+${matchedRecs.length > 0 ? `Recommended Next Concepts=[${matchedRecs.join(', ')}]` : ''}`;
+
+      const { text } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          temperature: 0.5,
+        },
+      });
+
+      const parsed = parseCleanJSON(text);
+      if (parsed) {
+          const validated = curriculumSuggestionOutputSchema.parse(parsed);
+        return res.json({
+          success: true,
+          data: {
+            category: validated.category || matchedDagNode?.subject || 'General',
+            difficulty: validated.difficulty || matchedDagNode?.difficulty || 'Intermediate',
+            prerequisites: validated.prerequisites || matchedDagNode?.prerequisites || [],
+            nextConcepts: validated.nextConcepts || matchedRecs || [],
+            tags: validated.tags || [subject, grade],
+            estimatedTimeMin: validated.estimatedTimeMin || 25,
+            description: validated.description || `Comprehensive study of ${title} for ${grade}.`,
+            pedagogicalRationale: validated.pedagogicalRationale || 'Ensures solid cognitive grounding in fundamental prerequisite theorems.',
+            source: 'gemini_and_ncert_dag',
+          },
+        });
+      }
+    } catch (err: any) {
+      console.info('AI curriculum suggestion fallback to NCERT DAG:', err?.message || 'busy');
+    }
+  }
+
+  // Fallback to NCERT DAG if Gemini is offline
+  return res.json({
+    success: true,
+    data: {
+      category: matchedDagNode?.subject || 'General Unit',
+      difficulty: (matchedDagNode?.difficulty as any) || 'Intermediate',
+      prerequisites: matchedDagNode?.prerequisites || [],
+      nextConcepts: matchedRecs || [],
+      tags: [subject, grade, title],
+      estimatedTimeMin: 25,
+      description: `Comprehensive study of ${title} according to NCERT standard syllabus.`,
+      pedagogicalRationale: 'Prerequisite dependencies mapped from 29,000 NCERT pedagogical nodes.',
+      source: 'ncert_curriculum_dag',
+    },
+  });
+});
+
+
+// 5. Cohort Student Management & Registration Store
+interface ServerStudent {
+  id: string;
+  name: string;
+  email?: string;
+  grade?: string;
+  studentId?: string;
+  avatar: string;
+  overallMastery: number;
+  strugglingConcept: string | null;
+  status: 'On Track' | 'Needs Intervention' | 'Excelling' | 'New Enrollee';
+  lastActive: string;
+  interest: string;
+  registeredAt?: number;
+  isNewRegistration?: boolean;
+  institution?: string;
+  institutionId?: string;
+  institutionCode?: string;
+}
+
+let cohortStudents: ServerStudent[] = [
+  {
+    id: 's-1',
+    name: 'Aarav Sharma',
+    email: 'aarav.sharma@student.learnx.org',
+    grade: 'Grade 10',
+    studentId: 'STU-2026-1048',
+    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
+    overallMastery: 84,
+    strugglingConcept: null,
+    status: 'Excelling',
+    lastActive: '12 mins ago',
+    interest: 'Cricket & Sports',
+    registeredAt: Date.now() - 1000 * 60 * 60 * 24 * 5,
+  },
+  {
+    id: 's-2',
+    name: 'Diya Patel',
+    email: 'diya.patel@student.learnx.org',

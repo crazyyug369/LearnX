@@ -1,0 +1,102 @@
+﻿app.post('/api/ai/tutor-chat', verifyToken, requireRole(['student']), validate(aiTutorChatSchema), async (req: any, res: any) => {
+  const message = req.body.message || req.body.userMessage || '';
+  const concept = req.body.concept || 'General Mathematics';
+  const struggleDetected = !!req.body.struggleDetected;
+  const struggleReason = req.body.struggleReason || 'Student inquiry';
+  const interest = req.body.interest || 'Cricket & Sports';
+  const language = req.body.language || 'English';
+  const history = req.body.history || [];
+  if (!process.env.GEMINI_API_KEY && process.env.MOCK_GEMINI !== 'true') {
+    return res.status(503).json({ success: false, error: 'AI features are currently unavailable due to missing system configuration.' });
+  }
+  const ai = getAIClient();
+  if (ai) {
+    try {
+      let languageInstructions = '';
+      const l = language.toLowerCase();
+
+      if (l.includes('gu') || l.includes('gujarat')) {
+        languageInstructions = `LANGUAGE MANDATE - CRITICAL:
+- You MUST respond in fluent, friendly Gujarati (àª—à«àªœàª°àª¾àª¤à«€) using standard Gujarati script.
+- Explain concepts warmly and encouragingly for an Indian school/college student.
+- For important technical terms, you may provide the English equivalent in parentheses for clarity, for example: àª¦à«àªµàª¿àª˜àª¾àª¤ àª¸àª®à«€àª•àª°àª£ (Quadratic Equation), àªµàª¿àªµà«‡àªšàª• (Discriminant), àª¢àª¾àª³ (Slope), àªªà«àª°àªµà«‡àª— (Acceleration), àª˜àª°à«àª·àª£ (Friction).
+- CRITICAL: Keep all mathematical formulas, numbers, variables, and units formatted in standard LaTeX enclosed in $...$ or $$...$$ (do not transliterate mathematical variables like x, y, a, b into Gujarati letters; keep them as LaTeX math $x$, $y$, $a$).`;
+      } else if (l.includes('hi') || l.includes('hindi')) {
+        languageInstructions = `LANGUAGE MANDATE - CRITICAL:
+- You MUST respond in fluent, friendly Hindi (à¤¹à¤¿à¤‚à¤¦à¥€) using standard Devanagari script.
+- Explain concepts warmly and encouragingly for an Indian school/college student.
+- For important technical terms, you may provide the English equivalent in parentheses for clarity, for example: à¤¦à¥à¤µà¤¿à¤˜à¤¾à¤¤ à¤¸à¤®à¥€à¤•à¤°à¤£ (Quadratic Equation), à¤µà¤¿à¤µà¤¿à¤•à¥à¤¤à¤•à¤° (Discriminant), à¤¢à¤¾à¤² (Slope), à¤¤à¥à¤µà¤°à¤£ (Acceleration), à¤˜à¤°à¥à¤·à¤£ (Friction).
+- CRITICAL: Keep all mathematical formulas, numbers, variables, and units formatted in standard LaTeX enclosed in $...$ or $$...$$ (do not transliterate mathematical variables like x, y, a, b into Devanagari; keep them as LaTeX math $x$, $y$, $a$).`;
+      } else {
+        languageInstructions = `LANGUAGE MANDATE:
+- Respond in clear, encouraging, friendly English.
+- Use accessible phrasing tailored for high school / college students.`;
+      }
+
+      const systemInstruction = `You are LearnX Adaptive Mentor, an empathetic, encouraging AI STEM tutor.
+Your goal is to build deep conceptual and mathematical mastery.
+
+${languageInstructions}
+
+EQUATION & FORMULA RENDERING MANDATE (CRITICAL):
+- ALWAYS format ALL mathematical symbols, equations, formulas, and expressions in valid LaTeX:
+  - For inline math, use single dollar signs: $ax^2 + bx + c = 0$, $\\Delta = b^2 - 4ac$, $m = \\frac{\\Delta y}{\\Delta x}$, $F = ma$.
+  - For major formulas, identities, or derivations, place them on their own lines wrapped in double dollar signs:
+    $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$
+- The student's browser is powered by KaTeX and will automatically render every formula into beautiful typesetting. Never write unformatted equations like "x = (-b +- sqrt(b^2-4ac))/2a".
+
+STRUCTURE:
+- 2 to 4 concise, easy-to-read paragraphs or bullet points.
+- If struggle is detected, weave in a brief micro-analogy connected to the student's interest.
+- End with a gentle checking question or prompt for the next step.`;
+
+      const prompt = `Target Concept: "${concept}".
+Student Hobby / Interest: "${interest}".
+Struggle Status: ${struggleDetected ? `ALERT: Student is hesitating or struggling (${struggleReason}). Be patient, scaffold step-by-step, do not overwhelm.` : 'Normal active inquiry'}.
+
+Student says: "${message}"
+Recent context: ${JSON.stringify(history.slice(-3))}`;
+
+      const { text, model } = await generateWithModelFallback(ai, {
+        contents: prompt,
+        config: {
+          systemInstruction,
+          temperature: 0.65,
+        },
+      });
+
+      if (text) {
+        return res.json({
+          success: true,
+          reply: text,
+          data: { reply: text },
+          source: 'gemini',
+          modelUsed: model,
+          language,
+        });
+      }
+    } catch (err: any) {
+      console.info('AI tutor using fallback mentor response:', err?.message || 'offline');
+    }
+  }
+
+  // Multilingual fallback reply with KaTeX equations
+  const reply = getMultilingualTutorFallback({
+    concept,
+    interest,
+    language,
+    struggleDetected,
+    struggleReason,
+    message,
+  });
+
+  return res.json({
+    success: true,
+    reply,
+    data: { reply },
+    source: 'adaptive_engine_fallback',
+    language,
+  });
+});
+
+// 3. Adaptive Question Generator
