@@ -3509,8 +3509,17 @@ async function startServer() {
 }
 
 export { app };
-import { fileURLToPath } from 'url';
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const currentFilePath = (() => {
+  if (typeof import.meta !== 'undefined' && import.meta.url) {
+    try {
+      return new URL(import.meta.url).pathname;
+    } catch {
+      // fall through
+    }
+  }
+  return typeof __filename !== 'undefined' ? __filename : undefined;
+})();
+if (process.argv[1] === currentFilePath) {
   startServer();
 }
 
