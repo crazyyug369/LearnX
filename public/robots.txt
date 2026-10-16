@@ -1,0 +1,17 @@
+# LearnX robots.txt
+# robots.txt does not protect private data — authentication is enforced at the application layer.
+# The Disallow directives are for crawl budget optimization only.
+
+User-agent: *
+Allow: /
+
+Disallow: /api/
+Disallow: /teacher/
+Disallow: /admin/
+Disallow: /tutor/
+Disallow: /assessment/
+Disallow: /lesson/
+Disallow: /progress/
+Disallow: /path/
+
+Sitemap: https://learnx-hgso.onrender.com/sitemap.xml
