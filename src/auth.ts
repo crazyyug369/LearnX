@@ -5,6 +5,14 @@ import { getDbPool, authenticateOrEnrollUser, institutionLogin } from './serverD
 import { validate } from './middleware/validate.js';
 import { loginSchema, registerSchema, institutionLoginSchema, claimPasswordSchema, forgotPasswordSchema } from './middleware/schemas.js';
 
+interface TokenPayload {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  institutionId?: string;
+}
+
 export const authRouter = express.Router();
 
 // Middleware
@@ -214,6 +222,35 @@ authRouter.post('/logout', (req, res) => {
 
 authRouter.get('/me', verifyToken, (req: any, res: any) => {
   res.json({ success: true, user: req.user });
+});
+
+// Session probe endpoint - returns auth status without exposing token details.
+authRouter.get('/session', (req: any, res: any) => {
+  const token = req.cookies?.access_token;
+  if (!token) {
+    return res.json({ success: true, user: null });
+  }
+
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({ success: false, error: 'Server configuration error' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, secret) as TokenPayload;
+    return res.json({
+      success: true,
+      user: {
+        id: decoded.id,
+        email: decoded.email,
+        name: decoded.name,
+        role: decoded.role,
+        institutionId: decoded.institutionId,
+      },
+    });
+  } catch {
+    return res.json({ success: true, user: null });
+  }
 });
 
 

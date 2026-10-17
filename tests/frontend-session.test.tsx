@@ -50,7 +50,7 @@ describe('Stage 1 Frontend Session Startup', () => {
 
   test('1. Valid session startup successfully resolves to student dashboard (path)', async () => {
     global.fetch = mock.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
-      if (url === '/api/auth/me') {
+      if (url === '/api/auth/session') {
         return {
           ok: true,
           json: async () => ({
@@ -67,14 +67,15 @@ describe('Stage 1 Frontend Session Startup', () => {
       return { ok: true, json: async () => ({}) };
     }) as any;
 
-    const { unmount, getByText, queryByText } = render(<App />);
+    const { unmount, getByText, queryByText, queryAllByText } = render(<App />);
 
-    // Initially should show loading
-    assert.ok(getByText(/Authenticating secure session/i));
+    // The public path renders immediately while the optional session check runs.
+    assert.equal(queryByText(/Authenticating secure session/i), null);
+    assert.ok(queryAllByText(/Sign In/i).length > 0);
 
-    // Wait for the app to finish loading and fetch completely
+    // Wait for the session check to promote the guest shell to the signed-in view.
     await waitFor(() => {
-      assert.ok(!queryByText(/Authenticating secure session/i));
+      assert.ok(queryByText(/Test Student/i));
     });
 
     // Should render the main knowledge graph/path view since role is student
@@ -85,7 +86,7 @@ describe('Stage 1 Frontend Session Startup', () => {
 
   test('2. No session safely boots to Guest View without flashing protected content', async () => {
     global.fetch = mock.fn(async (url: RequestInfo | URL) => {
-      if (url === '/api/auth/me') {
+      if (url === '/api/auth/session') {
         return {
           ok: false,
           status: 401,
@@ -100,8 +101,9 @@ describe('Stage 1 Frontend Session Startup', () => {
 
     const { unmount, getByText, queryByText, queryAllByText } = render(<App />);
 
-    // Initially should show loading
-    assert.ok(getByText(/Authenticating secure session/i));
+    // Guests get the public shell immediately; protected content is not shown.
+    assert.equal(queryByText(/Authenticating secure session/i), null);
+    assert.ok(queryAllByText(/Sign In/i).length > 0);
 
     // Wait for loading to finish and fall back to guest
     await waitFor(() => {

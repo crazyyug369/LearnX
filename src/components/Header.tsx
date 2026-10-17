@@ -526,6 +526,7 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Navigation Tabs - Role-Based Partition */}
+      <nav aria-label="Primary navigation">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-2 border-t border-stone-200/50 py-1.5 overflow-x-auto scrollbar-none">
         <div className="flex items-center gap-1.5">
           {isAdmin ? (
@@ -727,6 +728,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
       </div>
+      </nav>
     </header>
   );
 };

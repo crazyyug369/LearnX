@@ -3467,6 +3467,12 @@ app.get('/api/models/dataset/search', async (req, res) => {
   }
 });
 
+// Keep unknown API requests machine-readable instead of falling through to
+// Express's default HTML 404 page or the frontend static fallback.
+app.use('/api', (req, res) => {
+  return res.status(404).json({ success: false, error: 'API route not found' });
+});
+
 // Vite middleware and static serving
 async function startServer() {
   // Connect and initialize MySQL learnx_db tables and baseline seeds
@@ -3487,11 +3493,26 @@ async function startServer() {
   if (hasDist && process.env.VITE_DEV !== 'true') {
     console.log(`[Static] Serving optimized frontend from: ${distPath}`);
     app.use(express.static(distPath));
+
+    // Only the homepage and explicit index document are SPA entry points.
+    // robots.txt and sitemap.xml must remain their own crawlable files.
+    const spaRoutes = ['/', '/index.html'];
+
     app.get('*', (req, res, next) => {
       if (req.url.startsWith('/api')) {
         return next();
       }
-      res.sendFile(path.join(distPath, 'index.html'));
+
+      if (spaRoutes.includes(req.url)) {
+        return res.sendFile(path.join(distPath, 'index.html'));
+      }
+
+      const filePath = path.join(distPath, req.url);
+      if (fs.existsSync(filePath)) {
+        return res.sendFile(filePath);
+      }
+
+      return res.status(404).send('Not Found');
     });
   } else {
     const { createServer: createViteServer } = await import('vite');

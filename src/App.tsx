@@ -1,17 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Header } from './components/Header';
 import { KnowledgeGraph } from './components/KnowledgeGraph';
-import { LessonView } from './components/LessonView';
-import { AssessmentView } from './components/AssessmentView';
-import { StudentGrowthDashboard } from './components/StudentGrowthDashboard';
-import { AITutorChat } from './components/AITutorChat';
-import { TeacherDashboard } from './components/TeacherDashboard';
-import { TeacherAccessRestrictedView } from './components/TeacherAccessRestrictedView';
-import { AdminDashboard } from './components/admin/AdminDashboard';
-import { AdminAccessRestrictedView } from './components/admin/AdminAccessRestrictedView';
 import { DiagnosticModal } from './components/DiagnosticModal';
 import { AuthModal } from './components/AuthModal';
+import { NotFoundView } from './components/NotFoundView';
 import {
   SUBJECTS,
   INITIAL_CONCEPTS,
@@ -43,6 +36,43 @@ import {
   arePrerequisitesMastered,
   findWeakestPrerequisite,
 } from './utils/adaptiveEngine';
+
+// Keep the initial student path small. These views are only needed after a
+// user navigates away from the default knowledge graph or opens a protected
+// dashboard, so load them on demand instead of shipping them in the first JS
+// payload.
+const LessonView = lazy(() =>
+  import('./components/LessonView').then(({ LessonView: component }) => ({ default: component }))
+);
+const AssessmentView = lazy(() =>
+  import('./components/AssessmentView').then(({ AssessmentView: component }) => ({ default: component }))
+);
+const StudentGrowthDashboard = lazy(() =>
+  import('./components/StudentGrowthDashboard').then(({ StudentGrowthDashboard: component }) => ({ default: component }))
+);
+const AITutorChat = lazy(() =>
+  import('./components/AITutorChat').then(({ AITutorChat: component }) => ({ default: component }))
+);
+const TeacherDashboard = lazy(() =>
+  import('./components/TeacherDashboard').then(({ TeacherDashboard: component }) => ({ default: component }))
+);
+const TeacherAccessRestrictedView = lazy(() =>
+  import('./components/TeacherAccessRestrictedView').then(({ TeacherAccessRestrictedView: component }) => ({ default: component }))
+);
+const AdminDashboard = lazy(() =>
+  import('./components/admin/AdminDashboard').then(({ AdminDashboard: component }) => ({ default: component }))
+);
+const AdminAccessRestrictedView = lazy(() =>
+  import('./components/admin/AdminAccessRestrictedView').then(({ AdminAccessRestrictedView: component }) => ({ default: component }))
+);
+
+function DeferredViewFallback() {
+  return (
+    <div className="min-h-[16rem] flex items-center justify-center text-stone-500">
+      Loading learning view...
+    </div>
+  );
+}
 
 
 
@@ -81,7 +111,11 @@ export default function App() {
 
   // Fetch session on startup
   useEffect(() => {
-    apiFetch('/api/auth/me', { credentials: 'include' })
+    // An anonymous 401 is the normal guest path, not a session-expiry event.
+    // Keep the initial probe out of apiFetch so it does not open the auth modal
+    // or emit an unnecessary auth:unauthorized event before the public shell
+    // has painted.
+    fetch('/api/auth/session', { credentials: 'include' })
       .then((res) => {
         if (!res.ok) throw new Error('Not authenticated');
         return res.json();
@@ -538,7 +572,22 @@ export default function App() {
     setActiveTab('tutor');
   };
 
-  if (isAuthLoading) {
+  // Check for unknown pathnames and show Not Found view
+  const isNotFoundPath = typeof window !== 'undefined' && window.location.pathname !== '/';
+
+  if (isNotFoundPath) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <NotFoundView />
+      </div>
+    );
+  }
+
+  // The public knowledge graph is safe to render while the optional session
+  // check is in flight. Protected tabs still wait for authentication, which
+  // avoids exposing private data while removing the auth request from the
+  // anonymous homepage's critical rendering path.
+  if (isAuthLoading && activeTab !== 'path') {
     return (
       <div className="min-h-screen flex items-center justify-center editorial-canvas-bg text-stone-900">
         <div className="flex flex-col items-center gap-4">
@@ -623,14 +672,15 @@ export default function App() {
 
       {/* Main App Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 md:p-8">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-          >
+        <Suspense fallback={<DeferredViewFallback />}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            >
             {/* Admin Control Room & CRM Hub */}
             {activeTab === 'admin' && (
               isAdmin ? (
@@ -791,8 +841,9 @@ export default function App() {
                 />
               )
             )}
-          </motion.div>
-        </AnimatePresence>
+            </motion.div>
+          </AnimatePresence>
+        </Suspense>
       </main>
 
       {/* Modern Clean Footer */}

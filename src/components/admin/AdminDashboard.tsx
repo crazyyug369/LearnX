@@ -1062,6 +1062,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <img
                             src={u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80'}
                             alt={u.name}
+                            width="32"
+                            height="32"
                             className="w-8 h-8 rounded-full object-cover border border-stone-200 shrink-0"
                           />
                           <div>

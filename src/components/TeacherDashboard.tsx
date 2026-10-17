@@ -1069,6 +1069,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                             <img
                               src={student.avatar}
                               alt={student.name}
+                              width="32"
+                              height="32"
                               onError={(e) => {
                                 // fallback to initials avatar
                                 (e.target as HTMLElement).style.display = 'none';
