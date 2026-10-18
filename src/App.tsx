@@ -2,7 +2,6 @@ import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Header } from './components/Header';
 import { KnowledgeGraph } from './components/KnowledgeGraph';
-import { DiagnosticModal } from './components/DiagnosticModal';
 import { AuthModal } from './components/AuthModal';
 import { NotFoundView } from './components/NotFoundView';
 import {
@@ -64,6 +63,9 @@ const AdminDashboard = lazy(() =>
 );
 const AdminAccessRestrictedView = lazy(() =>
   import('./components/admin/AdminAccessRestrictedView').then(({ AdminAccessRestrictedView: component }) => ({ default: component }))
+);
+const DiagnosticModal = lazy(() =>
+  import('./components/DiagnosticModal').then(({ DiagnosticModal: component }) => ({ default: component }))
 );
 
 function DeferredViewFallback() {
@@ -876,20 +878,24 @@ export default function App() {
         initialMessage={authMessage}
       />
 
-      {/* Diagnostic Baseline Modal */}
-      <DiagnosticModal
-        isOpen={isDiagnosticOpen}
-        onClose={() => {
-          if (!isDiagnosticMandatory) {
-            setIsDiagnosticOpen(false);
-          }
-        }}
-        onCompleteDiagnostic={handleCompleteDiagnostic}
-        isMandatory={isDiagnosticMandatory}
-        grade={currentUser?.grade || 'Class 10'}
-        subject={currentSubject}
-        userId={currentUser?.id}
-      />
+      {/* Diagnostic Baseline Modal: load its curriculum and math renderer only when opened. */}
+      {isDiagnosticOpen && (
+        <Suspense fallback={null}>
+          <DiagnosticModal
+            isOpen={isDiagnosticOpen}
+            onClose={() => {
+              if (!isDiagnosticMandatory) {
+                setIsDiagnosticOpen(false);
+              }
+            }}
+            onCompleteDiagnostic={handleCompleteDiagnostic}
+            isMandatory={isDiagnosticMandatory}
+            grade={currentUser?.grade || 'Class 10'}
+            subject={currentSubject}
+            userId={currentUser?.id}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
