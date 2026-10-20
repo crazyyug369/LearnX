@@ -45,6 +45,7 @@ describe('AI Tutor Chat Session Persistence', () => {
     store = {};
     // ensure inner components don't scroll Into View and throw error in jsdom
     global.window.HTMLElement.prototype.scrollIntoView = () => {};
+    global.window.confirm = () => true;
     // mock apiFetch to avoid network calls during chat interaction
     const originalFetch = global.fetch;
     global.fetch = async () => {
@@ -154,6 +155,25 @@ describe('AI Tutor Chat Session Persistence', () => {
       } else {
         assert.ok(!storedItem, 'Storage item might be removed completely');
       }
+    });
+  });
+
+  test('Shows a visible network error when the tutor request fails', async () => {
+    global.fetch = async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: 'Tutor service unavailable' }),
+    }) as Response;
+
+    const { container } = render(
+      <AITutorChat concept={mockConcept} interest="Soccer" studentId="student_network_error" />
+    );
+
+    fireEvent.click(container.querySelector('#quick-prompt-0')!);
+
+    await waitFor(() => {
+      assert.ok(container.querySelector('[role="alert"]'), 'A visible alert should be rendered');
+      assert.ok(container.textContent?.includes('API Request Failed'), 'The alert should describe the failed request');
     });
   });
 });

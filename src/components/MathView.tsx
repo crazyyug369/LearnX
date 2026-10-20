@@ -117,6 +117,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
       return katex.renderToString(cleaned, {
         displayMode: true,
         throwOnError: false,
+        trust: false,
       });
     } catch {
       return escapeHtml(content);
@@ -145,6 +146,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
       const rendered = katex.renderToString(trimmed, {
         displayMode: true,
         throwOnError: false,
+        trust: false,
       });
       return pushToken(
         `<span class="katex-display-wrapper block my-2.5 text-center overflow-x-auto py-1 px-2 rounded-lg bg-stone-50/80 dark:bg-stone-900/60 border border-stone-200/50 dark:border-stone-800/50">${rendered}</span>`
@@ -160,6 +162,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
       const rendered = katex.renderToString(trimmed, {
         displayMode: true,
         throwOnError: false,
+        trust: false,
       });
       return pushToken(
         `<span class="katex-display-wrapper block my-2.5 text-center overflow-x-auto py-1 px-2 rounded-lg bg-stone-50/80 dark:bg-stone-900/60 border border-stone-200/50 dark:border-stone-800/50">${rendered}</span>`
@@ -176,6 +179,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
         const rendered = katex.renderToString(mathCode.trim(), {
           displayMode: true,
           throwOnError: false,
+          trust: false,
         });
         return pushToken(
           `<span class="katex-display-wrapper block my-2.5 text-center overflow-x-auto py-1 px-2 rounded-lg bg-stone-50/80 dark:bg-stone-900/60 border border-stone-200/50 dark:border-stone-800/50">${rendered}</span>`
@@ -193,6 +197,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
       const rendered = katex.renderToString(trimmed, {
         displayMode: false,
         throwOnError: false,
+        trust: false,
       });
       return pushToken(`<span class="katex-inline-wrapper inline-block mx-0.5">${rendered}</span>`);
     } catch {
@@ -212,6 +217,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
       const rendered = katex.renderToString(trimmed, {
         displayMode: false,
         throwOnError: false,
+        trust: false,
       });
       return `${prefix}${pushToken(`<span class="katex-inline-wrapper inline-block mx-0.5">${rendered}</span>`)}`;
     } catch {
@@ -227,6 +233,7 @@ function renderLatexAndMarkdown(content: string, forceDisplay: boolean = false, 
         const rendered = katex.renderToString(command.trim(), {
           displayMode: false,
           throwOnError: false,
+          trust: false,
         });
         return ` ${pushToken(`<span class="katex-inline-wrapper inline-block mx-0.5">${rendered}</span>`)} `;
       } catch {
@@ -271,6 +278,16 @@ export const MathView: React.FC<MathViewProps> = ({
   const html = useMemo(() => {
     return renderLatexAndMarkdown(content, display, formatMarkdown);
   }, [content, display, formatMarkdown]);
+
+  const isTrustedRenderedMarkup = useMemo(() => {
+    if (typeof DOMParser === 'undefined') return true;
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    return !parsed.body.querySelector('script, iframe, object, embed, form, input, textarea, button, link, meta, style, svg, [onerror], [onclick], [onload]');
+  }, [html]);
+
+  if (!isTrustedRenderedMarkup) {
+    return <Component className={`katex-rendered ${Component === 'span' ? 'inline' : 'block'} ${className}`}>{content}</Component>;
+  }
 
   return (
     <Component

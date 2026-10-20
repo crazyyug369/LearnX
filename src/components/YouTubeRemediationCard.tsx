@@ -10,6 +10,7 @@ import {
   XCircle,
   HelpCircle,
   Volume2,
+  AlertTriangle,
 } from 'lucide-react';
 import { Question } from '../types';
 import {
@@ -36,6 +37,7 @@ export const YouTubeRemediationCard: React.FC<YouTubeRemediationCardProps> = ({
   const [showInAppPlayer, setShowInAppPlayer] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [redirectCancelled, setRedirectCancelled] = useState(false);
+  const [openFeedback, setOpenFeedback] = useState<string | null>(null);
 
   const selectedAnswer = question.options[selectedOptionIndex];
   const correctAnswer = question.options[question.correctIndex];
@@ -59,7 +61,9 @@ export const YouTubeRemediationCard: React.FC<YouTubeRemediationCardProps> = ({
         if (prev <= 1) {
           clearInterval(interval);
           // Perform redirect to YouTube
-          openYouTubeReference(ytRef.directUrl);
+          if (!openYouTubeReference(ytRef.directUrl)) {
+            setOpenFeedback('Your browser blocked the YouTube tab. Use “Open on YouTube” below to try again.');
+          }
           return 0;
         }
         return prev - 1;
@@ -69,9 +73,14 @@ export const YouTubeRemediationCard: React.FC<YouTubeRemediationCardProps> = ({
     return () => clearInterval(interval);
   }, [autoRedirectEnabled, redirectCancelled, ytRef.directUrl]);
 
-  const handleManualOpen = (e: React.MouseEvent) => {
-    // Open in new tab
-    openYouTubeReference(ytRef.directUrl);
+  const handleManualOpen = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    const opened = openYouTubeReference(ytRef.directUrl);
+    if (opened) {
+      e.preventDefault();
+      setOpenFeedback('YouTube opened in a new tab.');
+    } else {
+      setOpenFeedback('Your browser blocked the new tab. Check your popup settings and try again.');
+    }
   };
 
   const handleCancelCountdown = () => {
@@ -123,6 +132,13 @@ export const YouTubeRemediationCard: React.FC<YouTubeRemediationCardProps> = ({
       </div>
 
       {/* Auto-Redirect Active Countdown Bar */}
+      {openFeedback && (
+        <div role="status" aria-live="polite" className="flex items-start gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-stone-700">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-stone-500" aria-hidden="true" />
+          <span>{openFeedback}</span>
+        </div>
+      )}
+
       {countdown !== null && countdown > 0 && (
         <div className="p-3 bg-red-50 rounded-lg border border-red-200 flex items-center justify-between gap-3 text-red-950 text-xs animate-pulse">
           <div className="flex items-center gap-2">
@@ -145,8 +161,9 @@ export const YouTubeRemediationCard: React.FC<YouTubeRemediationCardProps> = ({
               Open Now
             </a>
             <button
+              type="button"
               onClick={handleCancelCountdown}
-              className="px-2 py-1 text-stone-600 hover:text-stone-900 text-[11px] font-medium underline cursor-pointer"
+              className="px-2 py-1 text-stone-600 hover:text-stone-900 text-[11px] font-medium underline cursor-pointer focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
             >
               Cancel
             </button>
@@ -242,9 +259,11 @@ export const YouTubeRemediationCard: React.FC<YouTubeRemediationCardProps> = ({
               </span>
             </div>
             <button
+              type="button"
               onClick={() => setShowInAppPlayer(false)}
-              className="p-1 text-stone-400 hover:text-white rounded transition-colors"
+              className="p-1 text-stone-400 hover:text-white rounded transition-colors focus:outline-none focus:ring-2 focus:ring-stone-500"
               title="Close player"
+              aria-label="Close video player"
             >
               <X className="w-4 h-4" />
             </button>

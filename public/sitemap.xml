@@ -2,16 +2,14 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <!--
     LearnX Sitemap
-    Production domain configured: https://learnx-hgso.onrender.com/
+    Public production origin currently configured: https://learnx-hgso.onrender.com/
 
     Only indexable public pages are included.
-    All application tabs (path, lesson, assessment, progress, tutor, teacher, admin) require authentication
-    and are client-side state views, not crawlable URLs.
+    All application tabs (path, lesson, assessment, progress, tutor, teacher, admin) are
+    client-side state views, not separate stable public URLs. Private and personalized views
+    are intentionally excluded.
   -->
   <url>
     <loc>https://learnx-hgso.onrender.com/</loc>
-    <changefreq>monthly</changefreq>
-    <priority>1.0</priority>
-    <lastmod>2026-10-16</lastmod>
   </url>
 </urlset>

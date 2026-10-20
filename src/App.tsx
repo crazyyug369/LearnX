@@ -1,9 +1,24 @@
 import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { ArrowUp, MessageCircle } from 'lucide-react';
 import { Header } from './components/Header';
 import { KnowledgeGraph } from './components/KnowledgeGraph';
 import { AuthModal } from './components/AuthModal';
 import { NotFoundView } from './components/NotFoundView';
+import { PublicContactLinks, PublicSeoContent } from './components/PublicSeoContent';
+import { PublicIntro } from './public-site/PublicIntro';
+import {
+  appendPublicUtmParameters,
+  collectPublicUtmParameters,
+  getClientPublicSiteConfig,
+  getPublicSiteConfigFromData,
+  parseStoredPublicUtm,
+  PUBLIC_COPYRIGHT_YEAR,
+  PUBLIC_UTM_STORAGE_KEY,
+  type PublicAuthor,
+  type PublicSiteConfig,
+  type PublicUtmParams,
+} from './public-site/content';
 import {
   SUBJECTS,
   INITIAL_CONCEPTS,
@@ -29,12 +44,14 @@ import {
   apiFetchStudentProgress,
   apiUpdateUserProfile,
   apiLogoutUser,
+  clearSensitiveClientStorage,
 } from './utils/studentStorage';
 import { apiFetch } from './utils/apiClient';
 import {
   arePrerequisitesMastered,
   findWeakestPrerequisite,
 } from './utils/adaptiveEngine';
+import { updateSeoMetadata } from './utils/seo';
 
 // Keep the initial student path small. These views are only needed after a
 // user navigates away from the default knowledge graph or opens a protected
@@ -70,15 +87,48 @@ const DiagnosticModal = lazy(() =>
 
 function DeferredViewFallback() {
   return (
-    <div className="min-h-[16rem] flex items-center justify-center text-stone-500">
-      Loading learning view...
+    <LoadingShell label="Loading learning view..." />
+  );
+}
+
+function LoadingShell({ label }: { label: string }) {
+  return (
+    <div className="min-h-[16rem] flex items-center justify-center gap-3 text-stone-500" role="status" aria-live="polite">
+      <span className="learnx-loading-ring" aria-hidden="true" />
+      <span>{label}</span>
     </div>
   );
 }
 
+function getInitialPublicConfig(): PublicSiteConfig {
+  if (typeof window === 'undefined') return {};
+  if (typeof document !== 'undefined') {
+    const root = document.getElementById('root');
+    if (root?.dataset.learnxPublicConfig === '1') {
+      return getPublicSiteConfigFromData(root.dataset);
+    }
+  }
+  return getClientPublicSiteConfig();
+}
 
 
-export default function App() {
+
+export default function App({
+  pathname = typeof window === 'undefined' ? '/' : window.location.pathname,
+  publicAuthor,
+  publicConfig,
+}: { pathname?: string; publicAuthor?: PublicAuthor; publicConfig?: PublicSiteConfig } = {}) {
+  const siteConfig = publicConfig ?? getInitialPublicConfig();
+  const contact = siteConfig.contact;
+  const hasContact = Boolean(contact?.email || contact?.phone || contact?.creatorUrl);
+  const primaryContactHref = contact?.email
+    ? `mailto:${contact.email}`
+    : contact?.phone
+    ? `tel:${contact.phone}`
+    : contact?.creatorUrl
+    ? contact.creatorUrl
+    : undefined;
+
   // User Profile & Authentication State (Cookie-Based Session Validation)
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
@@ -91,20 +141,77 @@ export default function App() {
 
   const [selectedConceptId, setSelectedConceptId] = useState<string>('math-1');
 
-  const [activeTab, setActiveTab] = useState<AppTab>(() => {
-    // Try to get from sessionStorage first, fallback to 'path'
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = sessionStorage.getItem('learnx_active_tab');
-        if (stored && ['path', 'lesson', 'assessment', 'progress', 'tutor', 'teacher', 'teacher-roster', 'teacher-interventions', 'teacher-curriculum', 'admin'].includes(stored as AppTab)) {
-          return stored as AppTab;
-        }
-      } catch (e) {
-        console.warn('Failed to read activeTab from sessionStorage:', e);
+  // The server and first client render are always the same anonymous snapshot.
+  // Browser preferences are restored only after hydration; server rendering
+  // never reads cookies, storage, or a saved private tab.
+  const [activeTab, setActiveTab] = useState<AppTab>('path');
+  const [hasRestoredPreferences, setHasRestoredPreferences] = useState(false);
+
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [showConsentBanner, setShowConsentBanner] = useState(false);
+  const [utmParams, setUtmParams] = useState<PublicUtmParams>({});
+
+  const isNotFoundPath = pathname !== '/';
+
+  useEffect(() => {
+    updateSeoMetadata({ activeTab, isNotFoundPath });
+  }, [isNotFoundPath]);
+
+  useEffect(() => {
+    const updateScrollState = () => {
+      const documentElement = document.documentElement;
+      const scrollableHeight = documentElement.scrollHeight - window.innerHeight;
+      const progress = scrollableHeight > 0 ? (window.scrollY / scrollableHeight) * 100 : 0;
+      setScrollProgress(Math.min(100, Math.max(0, progress)));
+      setShowBackToTop(window.scrollY > 480);
+    };
+
+    updateScrollState();
+    window.addEventListener('scroll', updateScrollState, { passive: true });
+    window.addEventListener('resize', updateScrollState);
+    return () => {
+      window.removeEventListener('scroll', updateScrollState);
+      window.removeEventListener('resize', updateScrollState);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const fromQuery = collectPublicUtmParameters(window.location.search);
+      const stored = Object.keys(fromQuery).length
+        ? fromQuery
+        : parseStoredPublicUtm(sessionStorage.getItem(PUBLIC_UTM_STORAGE_KEY));
+      if (Object.keys(fromQuery).length) {
+        sessionStorage.setItem(PUBLIC_UTM_STORAGE_KEY, JSON.stringify(fromQuery));
       }
+      setUtmParams(stored);
+    } catch {
+      // Campaign attribution is optional and must never block the public shell.
+      setUtmParams({});
     }
-    return 'path';
-  });
+  }, []);
+
+  useEffect(() => {
+    try {
+      setShowConsentBanner(localStorage.getItem('learnx_public_consent') !== 'accepted');
+    } catch {
+      setShowConsentBanner(true);
+    }
+  }, []);
+
+  const dismissConsentBanner = () => {
+    setShowConsentBanner(false);
+    try {
+      localStorage.setItem('learnx_public_consent', 'accepted');
+    } catch {
+      // The banner is still dismissed for this render when storage is blocked.
+    }
+  };
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const [interest, setInterest] = useState<StudentInterest>('Cricket & Sports');
 
@@ -185,16 +292,25 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
 
   // Dark Mode State with LocalStorage Persistence & System Preference Fallback
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem('learnx_active_tab');
+      if (stored && ['path', 'lesson', 'assessment', 'progress', 'tutor', 'teacher', 'teacher-roster', 'teacher-interventions', 'teacher-curriculum', 'admin'].includes(stored as AppTab)) {
+        setActiveTab(stored as AppTab);
+      }
+    } catch {
+      // Storage is optional. The public snapshot remains usable without it.
+    }
     try {
       const stored = localStorage.getItem('learnx_theme_mode');
-      if (stored === 'dark') return true;
-      if (stored === 'light') return false;
-      return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      setIsDarkMode(stored === 'dark' || (stored !== 'light' && Boolean(window.matchMedia?.('(prefers-color-scheme: dark)').matches)));
     } catch {
-      return false;
+      // The external early-theme script also tolerates unavailable storage.
     }
-  });
+    setHasRestoredPreferences(true);
+  }, []);
 
   // Toggle Dark Mode
   const handleToggleDarkMode = () => {
@@ -203,6 +319,7 @@ export default function App() {
 
   // Sync dark class on html root and persist in localStorage
   useEffect(() => {
+    if (!hasRestoredPreferences) return;
     const root = document.documentElement;
     if (isDarkMode) {
       root.classList.add('dark');
@@ -215,7 +332,7 @@ export default function App() {
         localStorage.setItem('learnx_theme_mode', 'light');
       } catch {}
     }
-  }, [isDarkMode]);
+  }, [isDarkMode, hasRestoredPreferences]);
 
   // Global keyboard shortcut: Ctrl+D or Cmd+D to toggle dark mode
   useEffect(() => {
@@ -236,6 +353,7 @@ export default function App() {
 
   // Persist activeTab to sessionStorage for navigation state persistence
   useEffect(() => {
+    if (!hasRestoredPreferences) return;
     if (typeof window !== 'undefined') {
       try {
         sessionStorage.setItem('learnx_active_tab', activeTab);
@@ -243,7 +361,7 @@ export default function App() {
         console.warn('Failed to save activeTab to sessionStorage:', e);
       }
     }
-  }, [activeTab]);
+  }, [activeTab, hasRestoredPreferences]);
 
   // Session expiry handler
   useEffect(() => {
@@ -381,6 +499,7 @@ export default function App() {
     } catch (e) {
       console.warn('Logout API failed', e);
     }
+    clearSensitiveClientStorage();
     setCurrentUser(null);
     setConceptsMap(getCleanCurriculumConcepts());
     setStreakCount(0);
@@ -575,11 +694,9 @@ export default function App() {
   };
 
   // Check for unknown pathnames and show Not Found view
-  const isNotFoundPath = typeof window !== 'undefined' && window.location.pathname !== '/';
-
   if (isNotFoundPath) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen editorial-canvas-bg flex items-center justify-center overflow-x-hidden">
         <NotFoundView />
       </div>
     );
@@ -589,27 +706,22 @@ export default function App() {
   // check is in flight. Protected tabs still wait for authentication, which
   // avoids exposing private data while removing the auth request from the
   // anonymous homepage's critical rendering path.
-  if (isAuthLoading && activeTab !== 'path') {
-    return (
-      <div className="min-h-screen flex items-center justify-center editorial-canvas-bg text-stone-900">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-stone-200 border-t-stone-800 rounded-full animate-spin"></div>
-          <p className="text-stone-500 font-medium">Authenticating secure session...</p>
-        </div>
-      </div>
-    );
-  }
+  const isWaitingForSession = isAuthLoading && activeTab !== 'path';
 
   return (
     <div
       id="app-root"
-      className={`min-h-screen flex flex-col editorial-canvas-bg text-stone-900 transition-colors duration-200 theme-font-${fontTheme} ${
+      className={`min-h-screen flex flex-col editorial-canvas-bg text-stone-900 transition-colors duration-200 theme-font-${fontTheme} overflow-x-hidden ${
         isDyslexicFont || fontTheme === 'lexend' ? 'font-dyslexic' : ''
       } ${isHighContrast ? 'high-contrast' : ''} ${isDarkMode ? 'dark' : ''}`}
       style={{
         zoom: fontSizeMultiplier,
       }}
     >
+      <a href="#main-content" className="skip-to-content">Skip to content</a>
+      <div className="learnx-scroll-progress" aria-hidden="true">
+        <span style={{ width: `${scrollProgress}%` }} />
+      </div>
       {/* Universal Header with Authentication and Font Selector */}
       <Header
         currentSubject={currentSubject}
@@ -673,12 +785,17 @@ export default function App() {
       />
 
       {/* Main App Body */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 md:p-8">
+      <main id="main-content" tabIndex={-1} className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 md:p-8 outline-none">
+        <PublicIntro hasLessonHeading={activeTab === 'lesson' && !isWaitingForSession} />
+        <div id="learning-app">
+        {isWaitingForSession ? (
+          <LoadingShell label="Authenticating secure session..." />
+        ) : (
         <Suspense fallback={<DeferredViewFallback />}>
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
-              initial={{ opacity: 0, y: 8 }}
+              initial={activeTab === 'path' ? false : { opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
@@ -825,20 +942,6 @@ export default function App() {
                 <TeacherAccessRestrictedView
                   currentUser={currentUser}
                   onOpenTeacherAuth={() => handleOpenAuth('teacher')}
-                  onQuickDemoTeacher={(name, inst, dept) => {
-                    const demoTeacher: UserProfile = {
-                      id: `teacher-${Date.now()}`,
-                      name,
-                      email: 'priya.rao@dps.edu.in',
-                      role: 'teacher',
-                      institution: inst,
-                      department: dept,
-                      teacherId: 'FAC-2026-101',
-                      avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-                    };
-                    handleLogin(demoTeacher);
-                    setActiveTab('teacher');
-                  }}
                   onBackToStudent={() => setActiveTab('path')}
                 />
               )
@@ -846,25 +949,82 @@ export default function App() {
             </motion.div>
           </AnimatePresence>
         </Suspense>
+        )}
+        </div>
+        <PublicSeoContent author={publicAuthor} config={siteConfig} utmParams={utmParams} />
       </main>
 
       {/* Modern Clean Footer */}
-      <footer className="bg-white border-t border-stone-200/80 py-6 px-4 text-center text-xs text-stone-500">
+      <footer id="site-footer" className="bg-white border-t border-stone-200/80 py-6 px-4 text-center text-xs text-stone-500">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2 font-medium">
-            <span className="font-display font-semibold text-stone-900">LearnX</span>
+          <div className="flex flex-wrap items-center justify-center gap-2 font-medium">
+            <a href="/" className="font-display font-semibold text-stone-900 hover:text-[#114B43]">
+              LearnX
+            </a>
             <span className="text-stone-300">•</span>
             <span>Personalized Learning Platform</span>
+            <span aria-hidden="true">•</span>
+            <span>© {PUBLIC_COPYRIGHT_YEAR} LearnX</span>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 text-[11px] text-stone-400 font-medium">
-            <span>Syllabus Progression</span>
-            <span>•</span>
-            <span>Step-by-Step Guidance</span>
-            <span>•</span>
-            <span>Reading Accessibility</span>
+            <a href="/#curriculum" className="hover:text-stone-700 hover:underline">Curriculum</a>
+            <span aria-hidden="true">•</span>
+            <a href="/#faq" className="hover:text-stone-700 hover:underline">FAQs</a>
+            <span aria-hidden="true">•</span>
+            <a href="/#main-content" className="hover:text-stone-700 hover:underline">Back to learning</a>
+            {siteConfig.lastUpdated && (
+              <>
+                <span aria-hidden="true">•</span>
+                <span>Updated {siteConfig.lastUpdated}</span>
+              </>
+            )}
           </div>
         </div>
+        {(siteConfig.phrase || hasContact) && (
+          <div className="max-w-7xl mx-auto mt-4 flex flex-wrap items-center justify-center gap-4 border-t border-stone-100 pt-4">
+            {siteConfig.phrase && <span className="break-words text-[11px] text-stone-500">{siteConfig.phrase}</span>}
+            <PublicContactLinks contact={contact} utmParams={utmParams} />
+          </div>
+        )}
       </footer>
+
+      {showBackToTop && (
+        <button
+          type="button"
+          onClick={scrollToTop}
+          className="fixed bottom-20 right-5 z-30 inline-flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-2 text-xs font-semibold text-stone-700 shadow-lg transition hover:-translate-y-0.5 hover:border-[#114B43] hover:text-[#114B43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#114B43] sm:bottom-20 md:bottom-5"
+          aria-label="Back to top"
+        >
+          <ArrowUp className="h-4 w-4" aria-hidden="true" />
+          <span className="hidden sm:inline">Top</span>
+        </button>
+      )}
+
+      {hasContact && primaryContactHref && (
+        <a
+          href={primaryContactHref.startsWith('http') ? appendPublicUtmParameters(primaryContactHref, utmParams) : primaryContactHref}
+          target={primaryContactHref.startsWith('http') ? '_blank' : undefined}
+          rel={primaryContactHref.startsWith('http') ? 'noreferrer' : undefined}
+          className="fixed bottom-20 left-5 z-30 inline-flex max-w-[calc(100vw-7rem)] items-center gap-2 rounded-full bg-[#114B43] px-4 py-2.5 text-xs font-semibold text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-[#0f453c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#114B43] focus-visible:ring-offset-2 sm:bottom-20 md:bottom-5"
+          aria-label="Contact LearnX"
+        >
+          <MessageCircle className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">Contact</span>
+        </a>
+      )}
+
+      {showConsentBanner && (
+        <aside className="fixed inset-x-3 bottom-3 z-40 mx-auto flex max-w-xl flex-col gap-3 rounded-2xl border border-stone-200 bg-white p-4 text-sm text-stone-700 shadow-xl sm:flex-row sm:items-center sm:justify-between">
+          <p className="leading-5">LearnX stores a small preference and optional campaign attribution in your browser to keep the public experience consistent.</p>
+          <button
+            type="button"
+            onClick={dismissConsentBanner}
+            className="shrink-0 rounded-lg bg-stone-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-stone-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#114B43]"
+          >
+            Got it
+          </button>
+        </aside>
+      )}
 
       {/* Authentication Modal (Student Sign In / Sign Up & Teacher Sign In / Sign Up) */}
       <AuthModal

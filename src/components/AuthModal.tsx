@@ -16,7 +16,6 @@ import {
   Shield,
   Building2,
   Loader2,
-  Check,
 } from 'lucide-react';
 import { UserProfile, UserRole, StudentInterest, ConceptNode } from '../types';
 import { registerStudentInCohort, apiLoginUser, apiRegisterUser, apiClaimAccount, apiVerifyInstitutionCode, apiInstitutionLogin } from '../utils/studentStorage';
@@ -41,18 +40,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(initialMessage || null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const modalRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     if (isOpen) {
       setAuthError(initialMessage || null);
+      setAuthSuccess(null);
       // Minimal accessible focus behavior
       setTimeout(() => {
         modalRef.current?.focus();
       }, 0);
     }
   }, [isOpen, initialMessage]);
+
+  React.useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
 
   // Student Form State
   const [studentEmail, setStudentEmail] = useState('');
@@ -69,17 +77,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [teacherEmail, setTeacherEmail] = useState('');
   const [teacherPassword, setTeacherPassword] = useState('');
   const [teacherName, setTeacherName] = useState('');
-  const [teacherFacultyId, setTeacherFacultyId] = useState(`FAC-2026-${Math.floor(100 + Math.random() * 900)}`);
+  const [teacherFacultyId, setTeacherFacultyId] = useState('');
   const [teacherInstitution, setTeacherInstitution] = useState('');
   const [teacherDept, setTeacherDept] = useState('Mathematics');
 
   // Institution Form State
-  const [instLoginTerm, setInstLoginTerm] = useState('DPS2026');
-  const [instLoginPassword, setInstLoginPassword] = useState('learnx@123');
+  const [instLoginTerm, setInstLoginTerm] = useState('');
+  const [instLoginPassword, setInstLoginPassword] = useState('');
   const [instLoginError, setInstLoginError] = useState<string | null>(null);
 
   // Admin Form State
-  const [adminEmail, setAdminEmail] = useState('admin@learnx.org');
+  const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
 
   if (!isOpen) return null;
@@ -91,38 +99,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     'Space & Astronomy',
     'Robotics & Coding',
   ];
-
-  // Quick 1-Click Demo Profiles (connected directly to MySQL)
-  const handleQuickDemoStudent = async (name: string, interest: StudentInterest, grade: string) => {
-    setIsSubmitting(true);
-    try {
-      const email = `${name.toLowerCase().replace(/\s+/g, '.')}@student.learnx.org`;
-      await apiLoginUser({ email, password: 'password123' });
-      const verifiedUser = await refreshUserSession();
-      if (verifiedUser.role === 'student') registerStudentInCohort(verifiedUser);
-      onLogin(verifiedUser);
-      onClose();
-    } catch (err) {
-      console.warn('Login error:', err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleQuickDemoTeacher = async (name: string, institution: string, department: string, teacherId: string) => {
-    setIsSubmitting(true);
-    try {
-      const email = `${name.toLowerCase().replace(/[^a-z]/g, '.')}@${institution.toLowerCase().replace(/[^a-z]/g, '')}.edu.in`;
-      await apiLoginUser({ email, password: 'password123' });
-      const verifiedUser = await refreshUserSession();
-      onLogin(verifiedUser);
-      onClose();
-    } catch (err) {
-      console.warn('Teacher login error:', err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const handleVerifyCode = async (code: string) => {
     const trimmed = code.trim().toUpperCase();
@@ -151,12 +127,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-    const refreshUserSession = async () => {
-    const res = await fetch('/api/auth/me', { credentials: 'include' });
-    if (!res.ok) throw new Error('API Request Failed');
-    const data = await res.json();
-    if (!data.success || !data.user) throw new Error('Session invalid after auth');
+  const refreshUserSession = async () => {
+    let data: any = null;
+    try {
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
+      data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error || data?.message || 'Could not verify your session');
+      }
+    } catch (error: any) {
+      throw new Error(error?.message || 'Could not verify your session. Check your connection.');
+    }
+    if (!data?.success || !data.user) throw new Error('Session could not be verified after authentication');
     return data.user;
+  };
+
+  const completeAuthentication = (
+    user: UserProfile,
+    conceptsMap?: Record<string, ConceptNode[]>,
+    isNew?: boolean,
+    message = 'Authentication successful. Welcome to LearnX.'
+  ) => {
+    onLogin(user, conceptsMap, isNew);
+    setAuthError(null);
+    setAuthSuccess(message);
+    closeTimerRef.current = setTimeout(() => onClose(), 500);
   };
 
   const handleStudentSubmit = async (e: React.FormEvent) => {
@@ -192,8 +187,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
       
       const isNewStudent = Boolean(res.isNew || authMode === 'signup' || verifiedUser.isNew || !verifiedUser.diagnosticCompleted);
-      onLogin(verifiedUser, res?.conceptsMap, isNewStudent);
-      onClose();
+      completeAuthentication(
+        verifiedUser,
+        res?.conceptsMap,
+        isNewStudent,
+        authMode === 'signup' ? 'Account created successfully. Welcome to LearnX.' : 'Signed in successfully. Welcome back.'
+      );
     } catch (err: any) {
       if (err.cause?.needsClaim) {
         setAuthMode('claim_account');
@@ -211,7 +210,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsSubmitting(true);
     setAuthError(null);
     try {
-      const assignedId = teacherFacultyId.trim() || `FAC-2026-${Math.floor(100 + Math.random() * 900)}`;
+       const assignedId = teacherFacultyId.trim() || undefined;
       const cleanName = teacherName.trim() || (teacherEmail ? `Prof. ${teacherEmail.split("@")[0]}` : "Faculty Member");
 
       const payload = {
@@ -219,7 +218,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         email: teacherEmail.trim(),
         password: teacherPassword,
         role: 'teacher' as UserRole,
-        institution: verifiedInst ? verifiedInst.name : teacherInstitution.trim() || 'Kendriya Vidyalaya Academy',
+         institution: verifiedInst ? verifiedInst.name : teacherInstitution.trim() || undefined,
         institutionId: verifiedInst ? verifiedInst.id : undefined,
         institutionCode: verifiedInst ? verifiedInst.code : undefined,
         department: teacherDept,
@@ -233,8 +232,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       const verifiedUser = await refreshUserSession();
-      onLogin(verifiedUser);
-      onClose();
+      completeAuthentication(
+        verifiedUser,
+        undefined,
+        undefined,
+        authMode === 'signup' ? 'Faculty account created successfully.' : 'Educator signed in successfully.'
+      );
     } catch (err: any) {
       if (err.cause?.needsClaim) {
         setAuthMode('claim_account');
@@ -259,8 +262,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // After claim, log them in
       await apiLoginUser({ email, password: pw });
       const verifiedUser = await refreshUserSession();
-      onLogin(verifiedUser);
-      onClose();
+      completeAuthentication(verifiedUser, undefined, undefined, 'Account secured and signed in successfully.');
     } catch (err: any) {
       setAuthError(err.message || 'Failed to claim account');
     } finally {
@@ -272,25 +274,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setIsSubmitting(true);
     setInstLoginError(null);
     try {
-      await apiInstitutionLogin(instLoginTerm.trim(), instLoginPassword.trim());
+      const institutionResponse = await apiInstitutionLogin(instLoginTerm.trim(), instLoginPassword.trim());
+      if (!institutionResponse.success) {
+        throw new Error(institutionResponse.error || 'Failed to authenticate institution');
+      }
       const verifiedUser = await refreshUserSession();
-      onLogin(verifiedUser);
-      onClose();
-    } catch (err: any) {
-      setInstLoginError(err?.message || 'Failed to authenticate institution');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleQuickDemoInstitution = async (code: string, name: string) => {
-    setIsSubmitting(true);
-    setInstLoginError(null);
-    try {
-      await apiInstitutionLogin(code, 'learnx@123');
-      const verifiedUser = await refreshUserSession();
-      onLogin(verifiedUser);
-      onClose();
+      completeAuthentication(verifiedUser, undefined, undefined, 'Institution sign-in successful.');
     } catch (err: any) {
       setInstLoginError(err?.message || 'Failed to authenticate institution');
     } finally {
@@ -301,14 +290,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    setAuthError(null);
     try {
-      const email = adminEmail.trim() || 'admin@learnx.org';
+      const email = adminEmail.trim();
       await apiLoginUser({ email, password: adminPassword });
       const verifiedUser = await refreshUserSession();
-      onLogin(verifiedUser);
-      onClose();
-    } catch (err) {
-      console.warn('Admin auth error:', err);
+      completeAuthentication(verifiedUser, undefined, undefined, 'Administrator sign-in successful.');
+    } catch (err: any) {
+      setAuthError(err?.message || 'Administrator authentication failed');
     } finally {
       setIsSubmitting(false);
     }
@@ -343,8 +332,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
           <button
             id="btn-close-auth-modal"
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/50 transition-colors"
+            disabled={isSubmitting}
+            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/50 transition-colors focus:outline-none focus:ring-2 focus:ring-stone-400"
+            aria-label="Close authentication dialog"
           >
             <X className="w-4 h-4" />
           </button>
@@ -356,8 +348,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <button
               id="tab-auth-student"
               type="button"
-              onClick={() => setActiveRole('student')}
-              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all ${
+              onClick={() => {
+                setActiveRole('student');
+                setAuthMode('signin');
+                setAuthError(null);
+                setAuthSuccess(null);
+              }}
+              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all focus:outline-none focus:ring-2 focus:ring-[#114B43] ${
                 activeRole === 'student'
                   ? 'bg-white text-stone-900 shadow-2xs font-semibold'
                   : 'text-stone-600 hover:text-stone-900'
@@ -370,8 +367,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <button
               id="tab-auth-teacher"
               type="button"
-              onClick={() => setActiveRole('teacher')}
-              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all ${
+              onClick={() => {
+                setActiveRole('teacher');
+                setAuthMode('signin');
+                setAuthError(null);
+                setAuthSuccess(null);
+              }}
+              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all focus:outline-none focus:ring-2 focus:ring-[#114B43] ${
                 activeRole === 'teacher'
                   ? 'bg-white text-stone-900 shadow-2xs font-semibold'
                   : 'text-stone-600 hover:text-stone-900'
@@ -384,8 +386,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <button
               id="tab-auth-institution"
               type="button"
-              onClick={() => setActiveRole('institution')}
-              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all ${
+              onClick={() => {
+                setActiveRole('institution');
+                setAuthMode('signin');
+                setAuthError(null);
+                setAuthSuccess(null);
+              }}
+              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all focus:outline-none focus:ring-2 focus:ring-[#114B43] ${
                 activeRole === 'institution'
                   ? 'bg-white text-stone-900 shadow-2xs font-semibold'
                   : 'text-stone-600 hover:text-stone-900'
@@ -398,8 +405,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <button
               id="tab-auth-admin"
               type="button"
-              onClick={() => setActiveRole('admin')}
-              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all ${
+              onClick={() => {
+                setActiveRole('admin');
+                setAuthMode('signin');
+                setAuthError(null);
+                setAuthSuccess(null);
+              }}
+              className={`py-2 px-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all focus:outline-none focus:ring-2 focus:ring-[#114B43] ${
                 activeRole === 'admin'
                   ? 'bg-white text-stone-900 shadow-2xs font-semibold'
                   : 'text-stone-600 hover:text-stone-900'
@@ -415,8 +427,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div className="flex items-center gap-4">
               <button
                 type="button"
-                onClick={() => setAuthMode('signin')}
-                className={`pb-1.5 border-b-2 font-medium transition-all ${
+                onClick={() => {
+                  setAuthMode('signin');
+                  setAuthError(null);
+                  setAuthSuccess(null);
+                }}
+                className={`pb-1.5 border-b-2 font-medium transition-all focus:outline-none focus:ring-2 focus:ring-stone-400 rounded-sm ${
                   authMode === 'signin'
                     ? 'border-stone-900 text-stone-900 font-semibold'
                     : 'border-transparent text-stone-500 hover:text-stone-800'
@@ -427,8 +443,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {activeRole !== 'admin' && activeRole !== 'institution' && (
                 <button
                   type="button"
-                  onClick={() => setAuthMode('signup')}
-                  className={`pb-1.5 border-b-2 font-medium transition-all ${
+                  onClick={() => {
+                    setAuthMode('signup');
+                    setAuthError(null);
+                    setAuthSuccess(null);
+                  }}
+                  className={`pb-1.5 border-b-2 font-medium transition-all focus:outline-none focus:ring-2 focus:ring-stone-400 rounded-sm ${
                     authMode === 'signup'
                       ? 'border-stone-900 text-stone-900 font-semibold'
                       : 'border-transparent text-stone-500 hover:text-stone-800'
@@ -448,8 +468,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="p-6 pt-3 space-y-5">
 
           {authError && (
-            <div className="mb-4 p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+            <div role="alert" aria-live="assertive" className="mb-4 p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
               <span className="font-medium">{authError}</span>
+            </div>
+          )}
+
+          {authSuccess && (
+            <div role="status" aria-live="polite" className="mb-4 p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" aria-hidden="true" />
+              <span className="font-medium">{authSuccess}</span>
             </div>
           )}
 
@@ -485,7 +512,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 text-stone-400 hover:text-stone-600"
+                    className="absolute right-2.5 p-1 text-stone-400 hover:text-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
+                    aria-label={showPassword ? 'Hide new password' : 'Show new password'}
+                    aria-pressed={showPassword}
+                    title={showPassword ? 'Hide new password' : 'Show new password'}
                   >
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
@@ -497,10 +527,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   id="btn-submit-claim-account"
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <span>{isSubmitting ? 'Securing...' : 'Secure My Account'}</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <ArrowRight className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </form>
@@ -567,7 +597,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 text-stone-400 hover:text-stone-600"
+                    className="absolute right-2.5 p-1 text-stone-400 hover:text-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
+                    aria-label={showPassword ? 'Hide student password' : 'Show student password'}
+                    aria-pressed={showPassword}
+                    title={showPassword ? 'Hide student password' : 'Show student password'}
                   >
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
@@ -672,10 +705,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <button
                   id="btn-submit-student-auth"
                   type="submit"
-                  className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0D3F38] text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2"
+                  disabled={isSubmitting || verifyingInstCode}
+                  className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0D3F38] disabled:bg-stone-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
                 >
-                  <span>{authMode === 'signin' ? 'Sign In as Student' : 'Create & Launch Student Journey'}</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  <span>{isSubmitting ? 'Signing in...' : authMode === 'signin' ? 'Sign In as Student' : 'Create & Launch Student Journey'}</span>
+                  {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <ArrowRight className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </form>
@@ -761,7 +795,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 text-stone-400 hover:text-stone-600"
+                    className="absolute right-2.5 p-1 text-stone-400 hover:text-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
+                    aria-label={showPassword ? 'Hide educator password' : 'Show educator password'}
+                    aria-pressed={showPassword}
+                    title={showPassword ? 'Hide educator password' : 'Show educator password'}
                   >
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
@@ -810,10 +847,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <button
                   id="btn-submit-teacher-auth"
                   type="submit"
-                  className="w-full py-2.5 px-4 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2"
+                  disabled={isSubmitting}
+                  className="w-full py-2.5 px-4 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-stone-900 focus:ring-offset-1"
                 >
-                  <span>{authMode === 'signin' ? 'Sign In as Educator' : 'Register & Open Class Dashboard'}</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  <span>{isSubmitting ? 'Authenticating...' : authMode === 'signin' ? 'Sign In as Educator' : 'Register & Open Class Dashboard'}</span>
+                  {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <ArrowRight className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </form>
@@ -861,7 +899,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <label htmlFor="input-inst-login-password" className="block text-xs font-medium text-stone-700">
                     Institution Passkey
                   </label>
-                  <span className="text-[10px] text-stone-400 font-mono">Demo: learnx@123</span>
                 </div>
                 <div className="relative flex items-center">
                   <Lock className="w-4 h-4 text-stone-400 absolute left-3" />
@@ -876,7 +913,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 text-stone-400 hover:text-stone-600"
+                    className="absolute right-2.5 p-1 text-stone-400 hover:text-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
+                    aria-label={showPassword ? 'Hide institution passkey' : 'Show institution passkey'}
+                    aria-pressed={showPassword}
+                    title={showPassword ? 'Hide institution passkey' : 'Show institution passkey'}
                   >
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
@@ -888,40 +928,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   id="btn-submit-inst-auth"
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0d3b34] text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0d3b34] disabled:bg-stone-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
                 >
-                  <Building2 className="w-3.5 h-3.5" />
+                  {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <Building2 className="w-3.5 h-3.5" />}
                   <span>{isSubmitting ? 'Verifying...' : 'Sign In as Institution Manager'}</span>
                 </button>
 
-                <div className="pt-1">
-                  <div className="text-[10px] text-stone-400 font-medium uppercase tracking-wider mb-1.5 text-center">
-                    1-Click Demo Partner Schools
-                  </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleQuickDemoInstitution('DPS2026', 'Delhi Public School')}
-                      className="py-1.5 px-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-medium transition-all text-center border border-stone-200 cursor-pointer"
-                    >
-                      DPS Delhi
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleQuickDemoInstitution('KVA2026', 'Kendriya Vidyalaya Academy')}
-                      className="py-1.5 px-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-medium transition-all text-center border border-stone-200 cursor-pointer"
-                    >
-                      KV Academy
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleQuickDemoInstitution('SXHS2026', "St. Xavier's High School")}
-                      className="py-1.5 px-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[10px] font-medium transition-all text-center border border-stone-200 cursor-pointer"
-                    >
-                      St. Xavier's
-                    </button>
-                  </div>
-                </div>
               </div>
             </form>
           )}
@@ -974,7 +986,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 text-stone-400 hover:text-stone-600"
+                    className="absolute right-2.5 p-1 text-stone-400 hover:text-stone-600 focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
+                    aria-label={showPassword ? 'Hide administrator passkey' : 'Show administrator passkey'}
+                    aria-pressed={showPassword}
+                    title={showPassword ? 'Hide administrator passkey' : 'Show administrator passkey'}
                   >
                     {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                   </button>
@@ -986,23 +1001,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   id="btn-submit-admin-auth"
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0d3b34] text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0d3b34] disabled:bg-stone-300 disabled:cursor-not-allowed text-white rounded-lg text-xs font-medium transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
                 >
-                  <Shield className="w-3.5 h-3.5" />
+                  {isSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <Shield className="w-3.5 h-3.5" />}
                   <span>{isSubmitting ? 'Authenticating...' : 'Sign In to Admin Control Room'}</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAdminEmail('admin@learnx.org');
-                    const fakeEvent = { preventDefault: () => {} } as React.FormEvent;
-                    handleAdminSubmit(fakeEvent);
-                  }}
-                  className="w-full py-2 px-3 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-[11px] font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer border border-stone-200"
-                >
-                  <span>Quick Demo Admin Access (admin@learnx.org)</span>
-                </button>
               </div>
             </form>
           )}
@@ -1014,7 +1018,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               id="btn-continue-guest"
               type="button"
               onClick={onClose}
-              className="text-stone-600 hover:text-stone-900 font-medium underline underline-offset-2"
+                  className="text-stone-600 hover:text-stone-900 font-medium underline underline-offset-2 focus:outline-none focus:ring-2 focus:ring-stone-400 rounded-sm"
             >
               Continue exploring as guest
             </button>

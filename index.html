@@ -3,86 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LearnX - Personalized Learning Platform</title>
-    <meta name="description" content="Interactive learning platform for students with concept mastery, step-by-step guidance, and teacher insights." />
-    <meta name="robots" content="index, follow" />
-
-    <link rel="canonical" href="https://learnx-hgso.onrender.com/" />
-
-    <!-- Open Graph / Facebook -->
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content="LearnX - Personalized Learning Platform" />
-    <meta property="og:description" content="Interactive learning platform for students with concept mastery, step-by-step guidance, and teacher insights." />
-    <meta property="og:url" content="https://learnx-hgso.onrender.com/" />
-    <!-- og:image - add when a real public asset exists (recommended 1200x630px) -->
-    <!-- <meta property="og:image" content="https://learnx-hgso.onrender.com/og-image.png" /> -->
-    <meta property="og:site_name" content="LearnX" />
-
-    <!-- Twitter Card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="LearnX - Personalized Learning Platform" />
-    <meta name="twitter:description" content="Interactive learning platform for students with concept mastery, step-by-step guidance, and teacher insights." />
-    <!-- twitter:image - add when a real public asset exists -->
-    <!-- <meta name="twitter:image" content="https://learnx-hgso.onrender.com/twitter-image.png" /> -->
-
-    <!-- JSON-LD Structured Data: WebSite -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": "LearnX",
-      "url": "https://learnx-hgso.onrender.com/",
-      "description": "Interactive learning platform for students with concept mastery, step-by-step guidance, and teacher insights."
-    }
-    </script>
-
-    <!-- JSON-LD Structured Data: Organization (if real details available) -->
-    <!--
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "Organization",
-      "name": "LearnX",
-      "url": "https://learnx-hgso.onrender.com/",
-      "logo": "https://learnx-hgso.onrender.com/logo.png",
-      "sameAs": []
-    }
-    </script>
-    -->
-
+    <title id="learnx-fallback-title">LearnX — Personalized Learning Platform</title>
+    <meta id="learnx-fallback-description" name="description" content="Explore LearnX's curriculum, guided lessons, prerequisites, and mastery checks." />
+    <meta id="learnx-fallback-theme-color" name="theme-color" content="#114B43" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2216%22%20fill=%22%23114B43%22/%3E%3Cpath%20fill=%22white%22%20d=%22M18%2017h28v7H25v7h17v7H25v9h21v7H18z%22/%3E%3Ccircle%20cx=%2249%22%20cy=%2218%22%20r=%225%22%20fill=%22%2334D399%22/%3E%3C/svg%3E" />
+    <!--learnx-public-head-->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      rel="preload"
-      as="style"
+      rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Lexend:wght@400;500;600;700&display=swap"
-      crossorigin
-      onload="this.onload=null;this.rel='stylesheet'"
     />
-    <noscript>
-      <link
-        rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Lexend:wght@400;500;600;700&display=swap"
-      />
-    </noscript>
-    <script>
-      (function() {
-        try {
-          var mode = localStorage.getItem('learnx_theme_mode');
-          if (mode === 'dark' || (!mode && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-            document.documentElement.classList.add('dark');
-          }
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/early-theme.js"></script>
   </head>
   <body class="bg-[#faf9f5] text-stone-900 antialiased min-h-screen">
-    <div id="root">
-      <noscript>
-        <h1>LearnX — Personalized Learning Platform</h1>
-        <p>Interactive learning platform for students with concept mastery, step-by-step guidance, and teacher insights.</p>
-      </noscript>
-    </div>
+    <div id="root"><!--learnx-public-app--></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

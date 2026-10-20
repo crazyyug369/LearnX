@@ -4,10 +4,44 @@ import { apiFetch } from './apiClient';
 
 const STORAGE_KEY = 'learnx_cohort_students_v3';
 const STUDENT_CONCEPTS_PREFIX = 'learnx_student_concepts_';
+const isDevelopment = Boolean(
+  (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV,
+);
+
+/**
+ * Remove cached educational records when a session ends. Browser storage is
+ * an untrusted cache, not an authorization boundary, so do not leave roster,
+ * mastery, or tutor-history data available to the next person using the device.
+ */
+export function clearSensitiveClientStorage(): void {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (
+        typeof key === 'string' &&
+        (key === STORAGE_KEY ||
+          key.startsWith(STUDENT_CONCEPTS_PREFIX) ||
+          key.startsWith('learnx_tutor_chat_'))
+      ) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((key) => localStorage.removeItem(key));
+  } catch (err) {
+    console.warn('Could not clear cached educational data:', err);
+  }
+
+  try {
+    sessionStorage.removeItem('learnx_active_tab');
+  } catch (err) {
+    console.warn('Could not clear cached navigation state:', err);
+  }
+}
 
 // Enriched baseline students with grades and emails
 // ONLY FOR DEMO/E2E DETERMINISTIC SEEDING - DO NOT DEPEND ON FOR PROD
-const DEMO_BASELINE_STUDENTS: ClassroomStudent[] = [
+const DEMO_BASELINE_STUDENTS: ClassroomStudent[] = isDevelopment ? [
   {
     id: 's-1',
     name: 'Aarav Sharma',
@@ -78,7 +112,7 @@ const DEMO_BASELINE_STUDENTS: ClassroomStudent[] = [
     interest: 'Music & Creative Arts',
     registeredAt: Date.now() - 1000 * 60 * 60 * 24 * 2,
   },
-];
+] : [];
 
 /**
  * Deduplicate and sanitize classroom students:
@@ -364,12 +398,12 @@ export function getDefaultConceptsForStudent(
   const nameStr = (name || '').toLowerCase();
 
   // 1. Aarav Sharma (Default Demo Student 1: 53% math mastery)
-  if (idStr === 's-1' || idStr === 'student-demo-1' || nameStr.includes('aarav')) {
+  if (isDevelopment && (idStr === 's-1' || idStr === 'student-demo-1' || nameStr.includes('aarav'))) {
     return JSON.parse(JSON.stringify(INITIAL_CONCEPTS));
   }
 
   // 2. Diya Patel (Demo Student 2: 58% math mastery, struggling on Quadratic Equations)
-  if (idStr === 's-2' || idStr === 'student-demo-2' || nameStr.includes('diya')) {
+  if (isDevelopment && (idStr === 's-2' || idStr === 'student-demo-2' || nameStr.includes('diya'))) {
     const diyaConcepts: Record<string, ConceptNode[]> = JSON.parse(JSON.stringify(INITIAL_CONCEPTS));
     diyaConcepts.Mathematics = diyaConcepts.Mathematics.map((c) => {
       if (c.id === 'math-1') return { ...c, masteryScore: 78, status: 'mastered' };
@@ -389,7 +423,7 @@ export function getDefaultConceptsForStudent(
   }
 
   // 3. Rohan Verma (Demo Student 3: 72% math mastery, struggling on Parabolas)
-  if (idStr === 's-3' || nameStr.includes('rohan')) {
+  if (isDevelopment && (idStr === 's-3' || nameStr.includes('rohan'))) {
     const rohanConcepts: Record<string, ConceptNode[]> = JSON.parse(JSON.stringify(INITIAL_CONCEPTS));
     rohanConcepts.Mathematics = rohanConcepts.Mathematics.map((c) => {
       if (c.id === 'math-1') return { ...c, masteryScore: 86, status: 'mastered' };
@@ -403,7 +437,7 @@ export function getDefaultConceptsForStudent(
   }
 
   // 4. Ananya Iyer (Demo Student 4: 91% math mastery, excelling)
-  if (idStr === 's-4' || nameStr.includes('ananya')) {
+  if (isDevelopment && (idStr === 's-4' || nameStr.includes('ananya'))) {
     const ananyaConcepts: Record<string, ConceptNode[]> = JSON.parse(JSON.stringify(INITIAL_CONCEPTS));
     ananyaConcepts.Mathematics = ananyaConcepts.Mathematics.map((c) => ({
       ...c,
@@ -414,7 +448,7 @@ export function getDefaultConceptsForStudent(
   }
 
   // 5. Kabir Mehta (Demo Student 5: 52% math mastery, struggling on Linear Equations)
-  if (idStr === 's-5' || nameStr.includes('kabir')) {
+  if (isDevelopment && (idStr === 's-5' || nameStr.includes('kabir'))) {
     const kabirConcepts: Record<string, ConceptNode[]> = JSON.parse(JSON.stringify(INITIAL_CONCEPTS));
     kabirConcepts.Mathematics = kabirConcepts.Mathematics.map((c) => {
       if (c.id === 'math-1') return { ...c, masteryScore: 52, status: 'remediation' };

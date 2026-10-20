@@ -16,6 +16,7 @@ import {
   Lightbulb,
   Send,
   RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import { Question, StudentInterest } from '../types';
 import {
@@ -63,8 +64,11 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
   const [aiGuidance, setAiGuidance] = useState<AIGuidanceData | null>(null);
   const [customQuestionInput, setCustomQuestionInput] = useState('');
   const [customAnswer, setCustomAnswer] = useState<string | null>(null);
+  const [customError, setCustomError] = useState<string | null>(null);
   const [customAsking, setCustomAsking] = useState(false);
   const [tutorLanguage, setTutorLanguage] = useState<'English' | 'Hindi' | 'Gujarati'>('English');
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [guidanceRetryKey, setGuidanceRetryKey] = useState(0);
 
   const selectedAnswer = question.options[selectedOptionIndex];
   const correctAnswer = question.options[question.correctIndex];
@@ -79,6 +83,7 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
     let isMounted = true;
     setAiLoading(true);
     setCustomAnswer(null);
+    setAiError(null);
 
     const fetchAIGuidance = async (followUp: string = '') => {
       try {
@@ -102,53 +107,15 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
           const json = await res.json();
           if (isMounted && json.success && json.data) {
             setAiGuidance(json.data);
-          }
-        } catch (err) {
-        console.warn('Network issue fetching AI guidance, utilizing client fallback:', err);
-        // Concept-aware intelligent fallback directly
-        if (isMounted) {
-          const qText = ((question.text || '') + ' ' + (question.explanation || '')).toLowerCase();
-          if (qText.includes('friction') || qText.includes('force') || qText.includes('newton')) {
-            setAiGuidance({
-              misconceptionAnalysis: `Selecting "${selectedAnswer}" overlooks the static friction threshold check: when applied force doesn't exceed $f_{s,\\max}$, acceleration remains zero!`,
-              stepByStepCorrection: [
-                `Step 1: Compute maximum static resistance: $f_{s,\\max} = \\mu_s N = 0.6 \\times (5 \\times 10) = 30\\text{ N}$.`,
-                `Step 2: Compare applied force: $25\\text{ N} \\le 30\\text{ N}$, so friction balances the force completely ($f_s = 25\\text{ N}$).`,
-                `Step 3: By Newton's Laws: $F_{\\text{net}} = 0 \\implies a = 0\\text{ m/s}^2$. The correct choice is "${correctAnswer}".`,
-              ],
-              keyFormulaLatex: `f_{s,\\max} = \\mu_s N, \\quad \\vec{F}_{\\text{net}} = m \\cdot \\vec{a} = 0`,
-              formulaName: `Newton's 2nd Law & Static Friction Equilibrium`,
-              socraticHint: `Always check whether the applied force overcomes the static limit before calculating acceleration!`,
-              encouragingNote: `Great intuition checking the threshold—this is one of the most common physics exam traps!`,
-            });
-          } else if (qText.includes('loop') || qText.includes('continue') || qText.includes('for ')) {
-            setAiGuidance({
-              misconceptionAnalysis: `Selecting "${selectedAnswer}" happens if 'continue' is thought to break out of the whole loop rather than skip only the single current iteration.`,
-              stepByStepCorrection: [
-                `Step 1: Generated loop index sequence: $i \\in \\{0, 1, 2, 3, 4\\}$.`,
-                `Step 2: When $i == 3$, the 'continue' command executes and skips line 4.`,
-                `Step 3: Sum of accumulated iterations: $0 + 1 + 2 + 4 = 7$. Correct answer: "${correctAnswer}".`,
-              ],
-              keyFormulaLatex: `\\sum_{i \\in \\{0, 1, 2, 4\\}} i = 7`,
-              formulaName: `Control Flow State Invariant`,
-              socraticHint: `Remember: 'continue' skips the rest of the loop body for that iteration; 'break' terminates the loop entirely.`,
-              encouragingNote: `State tracing is the true superpower of master programmers!`,
-            });
           } else {
-            setAiGuidance({
-              misconceptionAnalysis: `Selecting "${selectedAnswer}" is a common slip caused by overlooking sign negation or skipping the intermediate evaluation step.`,
-              stepByStepCorrection: [
-                `Step 1: Identify given coefficients and structure: $ax^2 + bx + c = 0$.`,
-                `Step 2: Evaluate intermediate discriminant: $(-6)^2 = 36$ and subtract $4ac = 32$, yielding $\\Delta = 4 > 0$.`,
-                `Step 3: Solve via quadratic formula: $x = \\frac{-b \\pm \\sqrt{\\Delta}}{2a} \\implies x = 2, 4$.`,
-              ],
-              keyFormulaLatex: `x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}`,
-              formulaName: `Quadratic Formula & Root Classification`,
-              socraticHint: `Remember that squaring any real negative number like $(-6)^2$ always produces a positive quantity $+36$.`,
-              encouragingNote: `Catching this sign trap now ensures you'll ace subsequent problems!`,
-            });
+            throw new Error(json.error || 'The AI guidance service returned no explanation.');
           }
-        }
+        } catch (err: any) {
+          console.warn('Network issue fetching AI guidance:', err);
+          if (isMounted) {
+            setAiGuidance(null);
+            setAiError(err?.message || 'AI guidance is unavailable right now.');
+          }
       } finally {
         if (isMounted) setAiLoading(false);
       }
@@ -159,12 +126,13 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [question.id, selectedOptionIndex, studentInterest]);
+  }, [question.id, selectedOptionIndex, studentInterest, guidanceRetryKey]);
 
   // Handle custom student question to AI Tutor (multilingual & KaTeX supported)
   const handleAskFollowUp = async (promptText: string) => {
     if (!promptText.trim()) return;
     setCustomAsking(true);
+    setCustomError(null);
     try {
       const res = await fetch('/api/ai/tutor-chat', {
         method: 'POST',
@@ -184,16 +152,11 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
       if (reply) {
         setCustomAnswer(reply);
       } else {
-        setCustomAnswer('I am unable to process your request at this moment.');
+        throw new Error('The tutor returned an empty response.');
       }
-    } catch {
-      setCustomAnswer(
-        tutorLanguage === 'Hindi'
-          ? `समीकरण में पदों को अलग करें और सूत्र के अनुसार मान स्थापित करें।`
-          : tutorLanguage === 'Gujarati'
-          ? `સમીકરણમાં પદોને છૂટા પાડો અને સૂત્ર મુજબ કિંમત મૂકો.`
-          : `Focus on the fundamental identity: when substituting values, always preserve parentheses around negative numbers.`
-      );
+    } catch (err: any) {
+      setCustomAnswer(null);
+      setCustomError(err?.message || 'The tutor follow-up is unavailable right now.');
     } finally {
       setCustomAsking(false);
       setCustomQuestionInput('');
@@ -337,8 +300,9 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
               Open Now
             </a>
             <button
+              type="button"
               onClick={handleCancelCountdown}
-              className="px-2 py-1 text-stone-600 hover:text-stone-900 text-xs font-medium underline cursor-pointer"
+              className="px-2 py-1 text-stone-600 hover:text-stone-900 text-xs font-medium underline cursor-pointer focus:outline-none focus:ring-2 focus:ring-stone-400 rounded"
             >
               Stay on Page
             </button>
@@ -369,6 +333,20 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
               <p className="text-xs font-medium text-stone-700">
                 Preparing a helpful explanation for your answer...
               </p>
+            </div>
+          ) : aiError ? (
+            <div role="alert" aria-live="assertive" className="flex flex-col items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-5 text-center text-xs text-amber-900">
+              <AlertTriangle className="h-5 w-5 text-amber-700" aria-hidden="true" />
+              <p className="font-medium">AI guidance is unavailable right now.</p>
+              <p className="text-amber-800">{aiError}</p>
+              <button
+                type="button"
+                onClick={() => setGuidanceRetryKey((key) => key + 1)}
+                className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-amber-900 px-3 py-1.5 font-semibold text-white transition-colors hover:bg-amber-950 focus:outline-none focus:ring-2 focus:ring-amber-700 focus:ring-offset-1"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                Retry guidance
+              </button>
             </div>
           ) : aiGuidance ? (
             <div className="space-y-4 text-xs">
@@ -530,6 +508,12 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
                     </div>
                   </div>
                 )}
+                {customError && (
+                  <div role="alert" aria-live="assertive" className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>{customError}</span>
+                  </div>
+                )}
               </div>
             </div>
           ) : null}
@@ -632,9 +616,11 @@ export const MCQRemediationGuidance: React.FC<MCQRemediationGuidanceProps> = ({
                   </span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setShowInAppPlayer(false)}
-                  className="p-1 text-stone-400 hover:text-white rounded transition-colors"
+                  className="p-1 text-stone-400 hover:text-white rounded transition-colors focus:outline-none focus:ring-2 focus:ring-stone-500"
                   title="Close player"
+                  aria-label="Close video player"
                 >
                   <X className="w-4 h-4" />
                 </button>

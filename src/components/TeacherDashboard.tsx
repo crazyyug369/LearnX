@@ -1071,6 +1071,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                               alt={student.name}
                               width="32"
                               height="32"
+                              sizes="32px"
+                              loading="lazy"
+                              decoding="async"
                               onError={(e) => {
                                 // fallback to initials avatar
                                 (e.target as HTMLElement).style.display = 'none';

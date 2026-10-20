@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   GraduationCap,
   Sparkles,
@@ -26,6 +26,8 @@ import {
   Shield,
   AlertTriangle,
   Network,
+  Menu,
+  X,
 } from 'lucide-react';
 import { StudentInterest, UserProfile, UserRole, FontTheme, AppTab } from '../types';
 
@@ -86,6 +88,31 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
 }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+
+  React.useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [activeTab]);
+
+  React.useEffect(() => {
+    if (!isMobileMenuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMobileMenuOpen(false);
+        mobileMenuButtonRef.current?.focus();
+      }
+    };
+    const closeOnNavigation = () => {
+      if (window.matchMedia?.('(max-width: 767px)').matches) setIsMobileMenuOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('popstate', closeOnNavigation);
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('popstate', closeOnNavigation);
+    };
+  }, [isMobileMenuOpen]);
 
   const interests: StudentInterest[] = [
     'Cricket & Sports',
@@ -102,6 +129,11 @@ export const Header: React.FC<HeaderProps> = ({
     currentUser && currentUser.role === 'admin'
   );
 
+  const handleMobileTabSelect = (tab: AppTab) => {
+    setIsMobileMenuOpen(false);
+    onSelectTab(tab);
+  };
+
   const getSubjectIcon = (subj: string) => {
     switch (subj) {
       case 'Physics':
@@ -115,7 +147,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#FCFCFB]/95 backdrop-blur-md border-b border-stone-200/80 transition-all">
+    <header className="sticky top-0 z-40 w-full max-w-full overflow-x-hidden bg-[#FCFCFB]/95 backdrop-blur-md border-b border-stone-200/80 transition-all">
       {/* Top Quiet Utility & Accessibility Bar */}
       <div className="border-b border-stone-200/60 text-xs px-4 sm:px-6 py-1.5 flex items-center justify-end gap-3 bg-stone-100/60">
         {/* Right: Font Selector & Accessibility Controls */}
@@ -236,17 +268,21 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Main App Navigation Bar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
         {/* Brand & Identity */}
-        <div className="flex items-center gap-3">
+        <a
+          href="/"
+          aria-label="LearnX home"
+          className="flex items-center gap-3 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[#114B43]"
+        >
           <div className="w-9 h-9 rounded-xl bg-[#114B43] text-white flex items-center justify-center shadow-xs">
             <GraduationCap className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="font-display text-xl font-bold tracking-tight text-stone-900">
+              <span className="font-display text-xl font-bold tracking-tight text-stone-900">
                 LearnX
-              </h1>
+              </span>
               <span className="text-[10px] uppercase tracking-wider font-sans font-semibold px-2 py-0.5 bg-stone-100 text-stone-700 rounded border border-stone-200/80">
                 Learning
               </span>
@@ -255,10 +291,10 @@ export const Header: React.FC<HeaderProps> = ({
               Personalized learning for every student
             </p>
           </div>
-        </div>
+        </a>
 
         {/* Center: Curriculum Subject Selector & Student Interest */}
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="hidden md:flex flex-wrap items-center gap-2.5">
           {/* Subject Switcher Segmented Control */}
           <div className="flex items-center bg-stone-100/90 p-1 rounded-xl border border-stone-200/70">
             {allSubjects.map((subj) => {
@@ -316,7 +352,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Right: Faculty Badge & User Auth Profile */}
-        <div className="flex items-center gap-2.5">
+        <div className="hidden md:flex items-center gap-2.5">
           {currentUser?.role === 'student' && streakCount > 0 && (
             <div
               className="flex items-center gap-1.5 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/60 px-2.5 py-1.5 rounded-xl text-xs font-semibold shadow-2xs"
@@ -327,15 +363,15 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {isVerifiedTeacher && (
-            <div
-              className="flex items-center gap-1.5 bg-emerald-50 text-emerald-900 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs font-mono font-medium shadow-2xs"
-              title="Verified Educator Faculty ID"
-            >
-              <Users className="w-3.5 h-3.5 text-emerald-700" />
-              <span>Faculty ID: {currentUser?.teacherId || 'FAC-2026-101'}</span>
-            </div>
-          )}
+           {isVerifiedTeacher && (
+             <div
+               className="flex items-center gap-1.5 bg-emerald-50 text-emerald-900 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs font-mono font-medium shadow-2xs"
+               title="Verified Educator Faculty ID"
+             >
+               <Users className="w-3.5 h-3.5 text-emerald-700" />
+               <span>{currentUser?.teacherId ? `Faculty ID: ${currentUser.teacherId}` : 'Verified Educator'}</span>
+             </div>
+           )}
 
           {isAdmin && (
             <div
@@ -523,10 +559,91 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
         </div>
+
+        <button
+          type="button"
+          ref={mobileMenuButtonRef}
+          className="ml-auto inline-flex items-center justify-center rounded-xl border border-stone-200 bg-white p-2 text-stone-700 shadow-2xs transition hover:bg-stone-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#114B43] md:hidden"
+          aria-expanded={isMobileMenuOpen}
+          aria-controls="mobile-navigation-menu"
+          aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          onClick={() => setIsMobileMenuOpen((open) => !open)}
+        >
+          {isMobileMenuOpen ? <X className="h-5 w-5" aria-hidden="true" /> : <Menu className="h-5 w-5" aria-hidden="true" />}
+        </button>
+      </div>
+
+      <div
+        id="mobile-navigation-menu"
+        className={`${isMobileMenuOpen ? 'block' : 'hidden'} border-t border-stone-200/70 bg-white px-4 py-4 md:hidden`}
+      >
+        <div className="grid gap-2">
+          <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-stone-400">Navigate</p>
+          {isAdmin ? (
+            <>
+              <button type="button" onClick={() => handleMobileTabSelect('admin')} className="mobile-menu-item">Control Room &amp; CRM</button>
+              <button type="button" onClick={() => handleMobileTabSelect('teacher')} className="mobile-menu-item">Preview Faculty View</button>
+              <button type="button" onClick={() => handleMobileTabSelect('path')} className="mobile-menu-item">Preview Student View</button>
+            </>
+          ) : isVerifiedTeacher ? (
+            <>
+              <button type="button" onClick={() => handleMobileTabSelect('teacher')} className="mobile-menu-item">Classroom Overview</button>
+              <button type="button" onClick={() => handleMobileTabSelect('teacher-roster')} className="mobile-menu-item">Student Roster &amp; Profiles</button>
+              <button type="button" onClick={() => handleMobileTabSelect('teacher-interventions')} className="mobile-menu-item">Help Topics &amp; Action Plans</button>
+              <button type="button" onClick={() => handleMobileTabSelect('teacher-curriculum')} className="mobile-menu-item">Curriculum Knowledge Map</button>
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => handleMobileTabSelect('path')} className="mobile-menu-item">Knowledge Graph</button>
+              <button type="button" onClick={() => handleMobileTabSelect('lesson')} className="mobile-menu-item">Micro-Lesson</button>
+              <button type="button" onClick={() => handleMobileTabSelect('assessment')} className="mobile-menu-item">Mastery Check</button>
+              <button type="button" onClick={() => handleMobileTabSelect('progress')} className="mobile-menu-item">My Growth Analytics</button>
+              <button type="button" onClick={() => handleMobileTabSelect('tutor')} className="mobile-menu-item">Study Mentor</button>
+            </>
+          )}
+        </div>
+
+        <div className="mt-4 grid gap-2 border-t border-stone-200/70 pt-4">
+          <p className="px-1 text-[10px] font-semibold uppercase tracking-wider text-stone-400">Subjects</p>
+          <div className="grid grid-cols-1 gap-2 min-[360px]:grid-cols-3">
+            {allSubjects.map((subject) => (
+              <button
+                type="button"
+                key={subject}
+                onClick={() => { onSelectSubject(subject); setIsMobileMenuOpen(false); }}
+                className={`mobile-menu-item justify-center ${currentSubject === subject ? 'bg-[#114B43] text-white hover:bg-[#0f453c]' : ''}`}
+              >
+                {getSubjectIcon(subject)}
+                <span>{subject}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2 border-t border-stone-200/70 pt-4">
+          {currentUser ? (
+            <button
+              type="button"
+              onClick={() => { setIsProfileOpen(false); setIsMobileMenuOpen(false); onLogout(); }}
+              className="mobile-menu-item text-rose-700 hover:bg-rose-50"
+            >
+              <LogOut className="h-4 w-4" aria-hidden="true" />
+              Sign out
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={() => { setIsMobileMenuOpen(false); onOpenAuth('student'); }} className="mobile-menu-item">Student sign in</button>
+              <button type="button" onClick={() => { setIsMobileMenuOpen(false); onOpenAuth('teacher'); }} className="mobile-menu-item bg-stone-900 text-white hover:bg-stone-800">Teacher sign in</button>
+            </>
+          )}
+          {!isAdmin && (
+            <button type="button" onClick={() => handleMobileTabSelect('admin')} className="mobile-menu-item">Admin portal</button>
+          )}
+        </div>
       </div>
 
       {/* Navigation Tabs - Role-Based Partition */}
-      <nav aria-label="Primary navigation">
+      <nav aria-label="Primary navigation" className="hidden md:block">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between gap-2 border-t border-stone-200/50 py-1.5 overflow-x-auto scrollbar-none">
         <div className="flex items-center gap-1.5">
           {isAdmin ? (

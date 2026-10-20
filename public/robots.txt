@@ -1,17 +1,13 @@
 # LearnX robots.txt
-# robots.txt does not protect private data — authentication is enforced at the application layer.
-# The Disallow directives are for crawl budget optimization only.
+# The public curriculum catalog is served at /. Authentication and authorization
+# are enforced by the application; robots.txt does not protect private data.
+# Learning, tutor, teacher, and admin tabs are client-side states at /, not
+# separate public documents. Unknown URLs return 404 with noindex metadata;
+# crawlers may fetch those responses to observe their actual status.
 
 User-agent: *
 Allow: /
 
 Disallow: /api/
-Disallow: /teacher/
-Disallow: /admin/
-Disallow: /tutor/
-Disallow: /assessment/
-Disallow: /lesson/
-Disallow: /progress/
-Disallow: /path/
 
 Sitemap: https://learnx-hgso.onrender.com/sitemap.xml

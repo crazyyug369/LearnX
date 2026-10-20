@@ -153,7 +153,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const settingsData = await settingsRes.json();
       if (settingsData.success && settingsData.settings) {
         setSettings(settingsData.settings);
-        setApiKeyInput(settingsData.settings.geminiApiKey || '');
+        // The API key is write-only. The server returns only hasApiKey/maskedApiKey.
+        setApiKeyInput('');
         setSelectedGeminiModel(settingsData.settings.geminiModel || 'gemini-2.5-flash');
         setSelectedPriorityModels(
           settingsData.settings.geminiModelPriority || ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-pro']
@@ -356,7 +357,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          geminiApiKey: apiKeyInput,
+           ...(apiKeyInput.trim() ? { geminiApiKey: apiKeyInput.trim() } : {}),
           geminiModel: selectedGeminiModel,
           geminiModelPriority: selectedPriorityModels,
           geminiTemperature: geminiTemp,
@@ -369,6 +370,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const data = await res.json();
       if (data.success) {
         setSettings(data.settings);
+        setApiKeyInput('');
+        setShowApiKey(false);
         showToast('Google Gemini AI engine & platform settings saved successfully.');
       }
     } catch {
@@ -754,7 +757,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </p>
 
               <div className="flex items-center justify-between pt-2 border-t border-stone-100 text-xs">
-                <span className="text-stone-400">Key Status: {settings?.geminiApiKey ? 'Configured (Active)' : 'Missing'}</span>
+                 <span className="text-stone-400">Key Status: {settings?.hasApiKey ? `Configured (${settings.maskedApiKey || 'hidden'})` : 'Missing'}</span>
                 <button
                   onClick={() => setActiveSection('models')}
                   className="text-[#114B43] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
@@ -1064,6 +1067,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             alt={u.name}
                             width="32"
                             height="32"
+                            sizes="32px"
+                            loading="lazy"
+                            decoding="async"
                             className="w-8 h-8 rounded-full object-cover border border-stone-200 shrink-0"
                           />
                           <div>
@@ -1198,7 +1204,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
                 <p className="text-[11px] text-stone-400">
-                  Current key configured: <code>{apiKeyInput ? (showApiKey ? apiKeyInput : apiKeyInput.slice(0, 6) + '...' + apiKeyInput.slice(-4)) : 'None'}</code>
+                  {settings?.hasApiKey ? <>A key is configured server-side ({settings.maskedApiKey || 'hidden'}). Enter a new key only to replace it.</> : 'No key is configured server-side.'}
                 </p>
               </div>
 

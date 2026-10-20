@@ -1,22 +1,51 @@
 import mysql from 'mysql2/promise';
 import bcrypt from 'bcrypt';
+import crypto from 'node:crypto';
 import { INITIAL_CONCEPTS } from './data/curriculumData';
 import { getCurriculumForGrade, getDiagnosticQuestionsForGrade, normalizeGradeName } from './data/gradeCurriculum';
 import { ConceptNode, StudentInterest, UserProfile, Institution } from './types';
-
-// MySQL Connection Pool configuration for XAMPP
-const DB_CONFIG = {
-  host: process.env.MYSQL_HOST,
-  port: Number(process.env.MYSQL_PORT),
-  user: process.env.MYSQL_USER,
-  password: process.env.MYSQL_PASSWORD,
-  database: process.env.MYSQL_DATABASE,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-};
+import { buildDatabaseConfig } from './security/dbConfig.js';
+import { redactAuditDetails } from './security/audit.js';
+import { canManageCurriculum, canManageStudents, isLocalLegacyAuthEnabled, type SecurityPrincipal } from './security/authorization.js';
+import { DatabaseUnavailableError, ResourceAccessError, databaseErrorCode, rethrowSecurityError } from './security/errors.js';
+import { PASSWORD_HASH_ROUNDS, assertSupportedPassword, isSupportedPassword } from './security/passwords.js';
 
 let pool: mysql.Pool | null = null;
+
+const ENCRYPTED_SETTING_PREFIX = 'enc:v1:';
+
+function settingsEncryptionKey(): Buffer {
+  const secret = process.env.JWT_SECRET || '';
+  if (secret.length < 32) {
+    throw new Error('JWT_SECRET is required to encrypt stored settings');
+  }
+  return crypto.createHash('sha256').update(`learnx-settings:${secret}`).digest();
+}
+
+function encryptSecretSetting(value: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', settingsEncryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${ENCRYPTED_SETTING_PREFIX}${iv.toString('base64url')}.${tag.toString('base64url')}.${ciphertext.toString('base64url')}`;
+}
+
+function decryptSecretSetting(value: string): string {
+  if (!value.startsWith(ENCRYPTED_SETTING_PREFIX)) return value;
+  const encoded = value.slice(ENCRYPTED_SETTING_PREFIX.length).split('.');
+  if (encoded.length !== 3) throw new Error('Invalid encrypted setting');
+  const [ivEncoded, tagEncoded, ciphertextEncoded] = encoded;
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    settingsEncryptionKey(),
+    Buffer.from(ivEncoded, 'base64url'),
+  );
+  decipher.setAuthTag(Buffer.from(tagEncoded, 'base64url'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertextEncoded, 'base64url')),
+    decipher.final(),
+  ]).toString('utf8');
+}
 
 
 export async function closeDbPool() {
@@ -27,9 +56,92 @@ export async function closeDbPool() {
 }
 export function getDbPool(): mysql.Pool {
   if (!pool) {
-    pool = mysql.createPool(DB_CONFIG);
+    pool = mysql.createPool(buildDatabaseConfig());
   }
   return pool;
+}
+
+async function withTransaction<T>(operation: (connection: mysql.PoolConnection) => Promise<T>): Promise<T> {
+  const connection = await getDbPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await operation(connection);
+    await connection.commit();
+    return result;
+  } catch (error) {
+    try { await connection.rollback(); } catch { /* preserve the original failure */ }
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function addColumnMigration(db: mysql.Pool, sql: string): Promise<void> {
+  try {
+    await db.query(sql);
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'ER_DUP_FIELDNAME') throw error;
+  }
+}
+
+async function migrateLegacyPasswords(db: mysql.Pool, table: 'users' | 'institutions'): Promise<void> {
+  const [rows]: any = await db.query(
+    `SELECT id, password FROM ${table} WHERE password IS NOT NULL AND password != '' AND (password_hash IS NULL OR password_hash = '')`,
+  );
+  for (const row of rows || []) {
+    if (typeof row.password !== 'string' || !row.password) continue;
+    if (!isSupportedPassword(row.password)) {
+      // Do not silently migrate an ambiguous/truncated bcrypt credential.
+      await db.query(
+        `UPDATE ${table} SET password = NULL, needs_password = TRUE WHERE id = ? AND (password_hash IS NULL OR password_hash = '')`,
+        [row.id],
+      );
+      continue;
+    }
+    const hash = await bcrypt.hash(row.password, PASSWORD_HASH_ROUNDS);
+    await db.query(
+      `UPDATE ${table} SET password_hash = ?, needs_password = FALSE, password = NULL WHERE id = ? AND (password_hash IS NULL OR password_hash = '')`,
+      [hash, row.id],
+    );
+  }
+  // Also scrub rows that already had a hash before this migration ran.
+  await db.query(`UPDATE ${table} SET password = NULL WHERE password_hash IS NOT NULL AND password_hash != '' AND password IS NOT NULL`);
+}
+
+export interface AuthorizationAccount extends SecurityPrincipal {
+  name: string;
+  email: string;
+}
+
+/** Fail closed on account deletion, role/tenant changes, setup revocation or tenant suspension. */
+export async function getCurrentAuthorizationAccount(claims: SecurityPrincipal): Promise<AuthorizationAccount | null> {
+  try {
+    const db = getDbPool();
+    if (claims.role === 'institution') {
+      if (claims.institutionId !== claims.id) return null;
+      const [rows]: any = await db.query(
+        `SELECT id, name, email, status, password_hash, needs_password FROM institutions WHERE id = ? LIMIT 1`,
+        [claims.id],
+      );
+      const institution = rows?.[0];
+      if (!institution || institution.status !== 'active' || institution.needs_password || !institution.password_hash) return null;
+      return { id: institution.id, role: 'institution', name: `${institution.name} Admin`, email: institution.email, institutionId: institution.id };
+    }
+    const [rows]: any = await db.query(
+      `SELECT u.id, u.name, u.email, u.role, u.institution_id as institutionId,
+              u.password_hash, u.needs_password, i.status as institutionStatus
+       FROM users u LEFT JOIN institutions i ON i.id = u.institution_id WHERE u.id = ? LIMIT 1`,
+      [claims.id],
+    );
+    const account = rows?.[0];
+    if (!account || account.role !== claims.role || account.needs_password || !account.password_hash ||
+        (account.institutionId || undefined) !== (claims.institutionId || undefined) ||
+        (account.institutionId && account.institutionStatus !== 'active')) return null;
+    return { id: account.id, role: account.role, email: account.email, name: account.name, institutionId: account.institutionId || undefined };
+  } catch {
+    // Any failed current-account query means authorization cannot be established.
+    throw new DatabaseUnavailableError();
+  }
 }
 
 /**
@@ -102,17 +214,26 @@ export function getDemoConcepts(studentKey: string, grade?: string): Record<stri
  */
 export async function initDatabase(): Promise<boolean> {
   try {
+    const DB_CONFIG = buildDatabaseConfig();
+    if (!DB_CONFIG.database || !/^[A-Za-z0-9_]+$/.test(DB_CONFIG.database)) {
+      throw new Error('MYSQL_DATABASE must contain only letters, numbers, and underscores');
+    }
+
     // 1. Ensure learnx_db database exists
     const rootConn = await mysql.createConnection({
       host: DB_CONFIG.host,
       port: DB_CONFIG.port,
       user: DB_CONFIG.user,
       password: DB_CONFIG.password,
+      ...(DB_CONFIG.ssl ? { ssl: DB_CONFIG.ssl } : {}),
     });
-    await rootConn.query(
-      `CREATE DATABASE IF NOT EXISTS \`${DB_CONFIG.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
-    );
-    await rootConn.end();
+    try {
+      await rootConn.query(
+        `CREATE DATABASE IF NOT EXISTS \`${DB_CONFIG.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
+      );
+    } finally {
+      await rootConn.end();
+    }
 
     const db = getDbPool();
 
@@ -122,7 +243,7 @@ export async function initDatabase(): Promise<boolean> {
         id VARCHAR(64) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) DEFAULT '',
+        password VARCHAR(255) DEFAULT NULL,
         role ENUM('student', 'teacher', 'admin') DEFAULT 'student',
         student_id VARCHAR(64) DEFAULT NULL,
         teacher_id VARCHAR(64) DEFAULT NULL,
@@ -140,56 +261,26 @@ export async function initDatabase(): Promise<boolean> {
 
     
     // Migration: Add password_hash and needs_password to users
-    try {
-      await db.query("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) DEFAULT NULL");
-    } catch {}
-    try {
-      await db.query("ALTER TABLE users ADD COLUMN needs_password BOOLEAN DEFAULT TRUE");
-    } catch {}
+    await addColumnMigration(db, "ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) DEFAULT NULL");
+    await addColumnMigration(db, "ALTER TABLE users ADD COLUMN needs_password BOOLEAN DEFAULT TRUE");
+    await db.query('ALTER TABLE users ALTER COLUMN password SET DEFAULT NULL');
 
-    // Migration: Add password_hash and needs_password to institutions
-    try {
-      await db.query("ALTER TABLE institutions ADD COLUMN password_hash VARCHAR(255) DEFAULT NULL");
-    } catch {}
-    try {
-      await db.query("ALTER TABLE institutions ADD COLUMN needs_password BOOLEAN DEFAULT TRUE");
-    } catch {}
+    // Migrate any legacy plaintext user passwords exactly once, then clear the
+    // legacy column so credentials are never retained in plaintext at rest.
+    await migrateLegacyPasswords(db, 'users');
 
-    // Auto-migrate plaintext passwords in institutions (using bcrypt dynamically via dynamic import for ESM or plain bcrypt)
-    try {
-      const [insts]: any = await db.query("SELECT id, password FROM institutions WHERE password IS NOT NULL AND password != '' AND password_hash IS NULL");
-      for (const inst of (insts || [])) {
-        if (inst.password) {
-           const hash = await bcrypt.hash(inst.password, 10);
-           // Nullify plain password to prevent fallback
-           await db.query("UPDATE institutions SET password_hash = ?, needs_password = FALSE, password = NULL WHERE id = ?", [hash, inst.id]);
-        }
-      }
-    } catch (e) {
-       console.log('Error migrating institution passwords:', e.message);
-    }
-
-    // Migration to ensure admin & institution roles and institution links are supported on users table
-    try {
-      await db.query(`ALTER TABLE users MODIFY COLUMN role ENUM('student', 'teacher', 'admin', 'institution') DEFAULT 'student'`);
-    } catch {
-      // Column modification already applied
-    }
-    try {
-      await db.query(`ALTER TABLE users ADD COLUMN institution_id VARCHAR(64) DEFAULT NULL`);
-    } catch {}
-    try {
-      await db.query(`ALTER TABLE users ADD COLUMN institution_code VARCHAR(32) DEFAULT NULL`);
-    } catch {}
-
-    // 2.5 Create institutions table (for multi-tenant institutional administration)
+    // Create the institution table before applying its migrations. Fresh
+    // installs must never depend on a swallowed ALTER TABLE against a table
+    // that does not exist yet.
     await db.query(`
       CREATE TABLE IF NOT EXISTS institutions (
         id VARCHAR(64) PRIMARY KEY,
         code VARCHAR(32) UNIQUE NOT NULL,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) NOT NULL,
-        password VARCHAR(255) DEFAULT 'learnx@123',
+        password VARCHAR(255) DEFAULT NULL,
+        password_hash VARCHAR(255) DEFAULT NULL,
+        needs_password BOOLEAN DEFAULT TRUE,
         contact_person VARCHAR(128) DEFAULT NULL,
         phone VARCHAR(32) DEFAULT NULL,
         address TEXT DEFAULT NULL,
@@ -202,6 +293,18 @@ export async function initDatabase(): Promise<boolean> {
         INDEX idx_inst_email (email)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Migration: Add password_hash and needs_password to institutions
+    await addColumnMigration(db, "ALTER TABLE institutions ADD COLUMN password_hash VARCHAR(255) DEFAULT NULL");
+    await addColumnMigration(db, "ALTER TABLE institutions ADD COLUMN needs_password BOOLEAN DEFAULT TRUE");
+    await db.query('ALTER TABLE institutions ALTER COLUMN password SET DEFAULT NULL');
+
+    await migrateLegacyPasswords(db, 'institutions');
+
+    // Migration to ensure admin & institution roles and institution links are supported on users table
+    await db.query(`ALTER TABLE users MODIFY COLUMN role ENUM('student', 'teacher', 'admin', 'institution') DEFAULT 'student'`);
+    await addColumnMigration(db, `ALTER TABLE users ADD COLUMN institution_id VARCHAR(64) DEFAULT NULL`);
+    await addColumnMigration(db, `ALTER TABLE users ADD COLUMN institution_code VARCHAR(32) DEFAULT NULL`);
 
     // 3. Create student_progress table
     await db.query(`
@@ -219,11 +322,7 @@ export async function initDatabase(): Promise<boolean> {
     `);
 
     // Migration for diagnostic_completed if table already existed
-    try {
-      await db.query(`ALTER TABLE student_progress ADD COLUMN diagnostic_completed TINYINT(1) DEFAULT 0`);
-    } catch {
-      // Column already exists
-    }
+    await addColumnMigration(db, `ALTER TABLE student_progress ADD COLUMN diagnostic_completed TINYINT(1) DEFAULT 0`);
 
     // 4. Create cohort_students table (for fast teacher portal roster sync)
     await db.query(`
@@ -250,15 +349,9 @@ export async function initDatabase(): Promise<boolean> {
     `);
 
     // Migrations for cohort_students
-    try {
-      await db.query(`ALTER TABLE cohort_students ADD COLUMN institution VARCHAR(255) DEFAULT NULL`);
-    } catch {}
-    try {
-      await db.query(`ALTER TABLE cohort_students ADD COLUMN institution_id VARCHAR(64) DEFAULT NULL`);
-    } catch {}
-    try {
-      await db.query(`ALTER TABLE cohort_students ADD COLUMN institution_code VARCHAR(32) DEFAULT NULL`);
-    } catch {}
+    await addColumnMigration(db, `ALTER TABLE cohort_students ADD COLUMN institution VARCHAR(255) DEFAULT NULL`);
+    await addColumnMigration(db, `ALTER TABLE cohort_students ADD COLUMN institution_id VARCHAR(64) DEFAULT NULL`);
+    await addColumnMigration(db, `ALTER TABLE cohort_students ADD COLUMN institution_code VARCHAR(32) DEFAULT NULL`);
 
     // 5. Create quiz_attempts table (stores granular student assessment logs & real Bloom's metrics)
     await db.query(`
@@ -348,10 +441,18 @@ export async function initDatabase(): Promise<boolean> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // 6.5 Seed baseline institutions if empty
+    // Demo records are opt-in and never created in production. A deployment
+    // must provision real institutions through an authenticated workflow.
+    const allowDemoSeeds = process.env.NODE_ENV !== 'production' &&
+      process.env.ALLOW_DEMO_SEEDS === 'true' &&
+      Boolean(process.env.DEMO_SEED_PASSWORD);
+    if (allowDemoSeeds) assertSupportedPassword(process.env.DEMO_SEED_PASSWORD);
+
+    // 6.5 Seed baseline institutions if explicitly enabled
     const [instRows]: any = await db.query('SELECT COUNT(*) as cnt FROM institutions');
-    if (instRows && instRows[0] && instRows[0].cnt === 0) {
+    if (allowDemoSeeds && instRows && instRows[0] && instRows[0].cnt === 0) {
       console.log('Seeding baseline institutions into learnx_db...');
+      const demoPasswordHash = await bcrypt.hash(process.env.DEMO_SEED_PASSWORD!, PASSWORD_HASH_ROUNDS);
       const baselineInstitutions = [
         {
           id: 'inst-dps-2026',
@@ -389,31 +490,17 @@ export async function initDatabase(): Promise<boolean> {
       ];
       for (const inst of baselineInstitutions) {
         await db.query(
-          `INSERT INTO institutions (id, code, name, email, password, contact_person, phone, city, state, status)
-           VALUES (?, ?, ?, ?, 'learnx@123', ?, ?, ?, ?, ?)
+          `INSERT INTO institutions (id, code, name, email, password_hash, needs_password, contact_person, phone, city, state, status)
+           VALUES (?, ?, ?, ?, ?, FALSE, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE name = VALUES(name)`,
-          [inst.id, inst.code, inst.name, inst.email, inst.contactPerson, inst.phone, inst.city, inst.state, inst.status]
+          [inst.id, inst.code, inst.name, inst.email, demoPasswordHash, inst.contactPerson, inst.phone, inst.city, inst.state, inst.status]
         );
       }
     }
 
-    // Update existing students/teachers with baseline institution links if missing
-    try {
-      await db.query(`
-        UPDATE users 
-        SET institution_id = 'inst-dps-2026', institution_code = 'DPS2026', institution = 'Delhi Public School'
-        WHERE institution_id IS NULL AND (role = 'student' OR role = 'teacher')
-      `);
-      await db.query(`
-        UPDATE cohort_students 
-        SET institution_id = 'inst-dps-2026', institution_code = 'DPS2026', institution = 'Delhi Public School'
-        WHERE institution_id IS NULL
-      `);
-    } catch {}
-
     // 7. Seed baseline students if empty
     const [rows]: any = await db.query('SELECT COUNT(*) as cnt FROM users');
-    if (rows && rows[0] && rows[0].cnt === 0) {
+    if (allowDemoSeeds && rows && rows[0] && rows[0].cnt === 0) {
       console.log('Seeding baseline accounts into learnx_db...');
 
       const baselineSeed = [
@@ -562,29 +649,33 @@ export async function initDatabase(): Promise<boolean> {
       await db.query("UPDATE cohort_students SET grade = REPLACE(grade, 'Grade ', 'Class ') WHERE grade LIKE 'Grade %'");
     } catch {}
 
-    // Ensure default Administrator exists
+    // Provision the first administrator only from explicit deployment
+    // variables. There is no shared/default administrator credential.
     const [adminCheck]: any = await db.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
-    if (!adminCheck || adminCheck.length === 0) {
+    const bootstrapAdminEmail = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+    const bootstrapAdminPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+    if ((!adminCheck || adminCheck.length === 0) && bootstrapAdminEmail && bootstrapAdminPassword) {
+      assertSupportedPassword(bootstrapAdminPassword);
+      const bootstrapHash = await bcrypt.hash(bootstrapAdminPassword, PASSWORD_HASH_ROUNDS);
       await db.query(
-        `INSERT INTO users (id, name, email, role, institution, department, avatar)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE role = 'admin'`,
+        `INSERT INTO users (id, name, email, password_hash, needs_password, role, institution, department)
+         VALUES (?, ?, ?, ?, FALSE, 'admin', ?, ?)`,
         [
-          'admin-1',
+          `admin_${Date.now()}`,
           'System Administrator',
-          'admin@learnx.org',
-          'admin',
+          bootstrapAdminEmail,
+          bootstrapHash,
           'LearnX Central Operations',
           'Platform Administration',
-          'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
         ]
       );
+    } else if (!adminCheck || adminCheck.length === 0) {
+      console.warn('No administrator is provisioned. Set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD for first deployment setup.');
     }
 
     // Ensure default system settings exist
     const defaultSettings: Record<string, string> = {
       gemini_enabled: 'true',
-      gemini_api_key: process.env.GEMINI_API_KEY ,
       gemini_model: 'gemini-2.5-flash',
       gemini_model_priority: JSON.stringify(['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-pro']),
       gemini_temperature: '0.7',
@@ -602,7 +693,7 @@ export async function initDatabase(): Promise<boolean> {
 
     return true;
   } catch (err) {
-    console.error('Database connection or initialization error:', err);
+    console.error('Database connection or initialization error:', databaseErrorCode(err));
     return false;
   }
 }
@@ -631,6 +722,7 @@ export async function authenticateOrEnrollUser(params: {
   overallMastery: number;
   isNew: boolean;
 }> {
+  if (!isLocalLegacyAuthEnabled()) throw new ResourceAccessError();
   const db = getDbPool();
   const rawTerm = (params.email || params.name || params.institutionCode || '').trim();
   const lowerTerm = rawTerm.toLowerCase();
@@ -973,7 +1065,8 @@ export async function saveStudentProgress(
 
     return true;
   } catch (err) {
-    console.error('Error saving student progress to MySQL:', err);
+    rethrowSecurityError(err);
+    console.error('Error saving student progress to MySQL:', databaseErrorCode(err));
     return false;
   }
 }
@@ -1044,7 +1137,8 @@ export async function updateUserProfile(
 
     return true;
   } catch (err) {
-    console.error('Error updating user profile in MySQL:', err);
+    rethrowSecurityError(err);
+    console.error('Error updating user profile in MySQL:', databaseErrorCode(err));
     return false;
   }
 }
@@ -1164,7 +1258,8 @@ export async function getCohortStudentsFromDb(filters?: {
 
     return deduped;
   } catch (err) {
-    console.error('Error getting cohort students from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting cohort students from DB:', databaseErrorCode(err));
     return [];
   }
 }
@@ -1211,7 +1306,8 @@ export async function getStudentProgressFromDb(userId: string): Promise<{
       name: row.name,
     };
   } catch (err) {
-    console.error('Error getting student progress from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting student progress from DB:', databaseErrorCode(err));
     return null;
   }
 }
@@ -1270,7 +1366,8 @@ export async function saveQuizAttempt(attempt: {
     );
     return { id: attemptId, success: true };
   } catch (err) {
-    console.error('Error saving quiz attempt to DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error saving quiz attempt to DB:', databaseErrorCode(err));
     return { id: '', success: false };
   }
 }
@@ -1314,7 +1411,8 @@ export async function getUserQuizAttempts(userId: string, limit = 20): Promise<a
       };
     });
   } catch (err) {
-    console.error('Error getting user quiz attempts from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting user quiz attempts from DB:', databaseErrorCode(err));
     return [];
   }
 }
@@ -1322,7 +1420,7 @@ export async function getUserQuizAttempts(userId: string, limit = 20): Promise<a
 /**
  * Fetch curriculum nodes from MySQL for dynamic Teacher Curriculum Studio
  */
-export async function getCurriculumNodesFromDb(subject?: string, grade?: string): Promise<any[]> {
+export async function getCurriculumNodesFromDb(subject?: string, grade?: string, actor?: SecurityPrincipal): Promise<any[]> {
   try {
     const db = getDbPool();
     let query = `SELECT id, subject, grade, title, category, description, difficulty,
@@ -1331,13 +1429,14 @@ export async function getCurriculumNodesFromDb(subject?: string, grade?: string)
                         is_custom as isCustom, created_at as createdAt
                  FROM curriculum_nodes`;
     const params: any[] = [];
-    if (subject && grade) {
-      query += ` WHERE subject = ? AND grade = ?`;
-      params.push(subject, grade);
-    } else if (subject) {
-      query += ` WHERE subject = ?`;
-      params.push(subject);
+    const conditions: string[] = [];
+    if (actor?.role !== 'admin') {
+      conditions.push(actor?.id ? '(is_custom = FALSE OR created_by = ?)' : 'is_custom = FALSE');
+      if (actor?.id) params.push(actor.id);
     }
+    if (subject) { conditions.push('subject = ?'); params.push(subject); }
+    if (grade) { conditions.push('grade = ?'); params.push(grade); }
+    if (conditions.length) query += ` WHERE ${conditions.join(' AND ')}`;
     query += ` ORDER BY created_at ASC`;
 
     const [rows]: any = await db.query(query, params);
@@ -1362,7 +1461,8 @@ export async function getCurriculumNodesFromDb(subject?: string, grade?: string)
       };
     });
   } catch (err) {
-    console.error('Error getting curriculum nodes from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting curriculum nodes from DB:', databaseErrorCode(err));
     return [];
   }
 }
@@ -1383,44 +1483,37 @@ export async function saveCurriculumNodeToDb(node: {
   estimatedTime?: number;
   createdBy?: string;
   isCustom?: boolean;
-}): Promise<boolean> {
+}, actor?: SecurityPrincipal): Promise<boolean> {
+  if (!canManageCurriculum(actor)) throw new ResourceAccessError();
   try {
     const db = getDbPool();
     const prereqsStr = JSON.stringify(node.prerequisites || []);
     const tagsStr = JSON.stringify(node.tags || []);
 
-    await db.query(
-      `INSERT INTO curriculum_nodes 
-       (id, subject, grade, title, category, description, difficulty, prerequisites_json, tags_json, estimated_time, created_by, is_custom)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         subject = VALUES(subject),
-         grade = VALUES(grade),
-         title = VALUES(title),
-         category = VALUES(category),
-         description = VALUES(description),
-         difficulty = VALUES(difficulty),
-         prerequisites_json = VALUES(prerequisites_json),
-         tags_json = VALUES(tags_json),
-         estimated_time = VALUES(estimated_time)`,
-      [
-        node.id,
-        node.subject,
-        node.grade || 'Grade 10',
-        node.title,
-        node.category || 'General',
-        node.description || '',
-        node.difficulty || 'Beginner',
-        prereqsStr,
-        tagsStr,
-        node.estimatedTime || 20,
-        node.createdBy || 'teacher',
-        node.isCustom ?? true ? 1 : 0,
-      ]
-    );
+    const [existing]: any = await db.query('SELECT created_by, is_custom FROM curriculum_nodes WHERE id = ? LIMIT 1', [node.id]);
+    const values = [node.subject, node.grade || 'Grade 10', node.title, node.category || 'General', node.description || '',
+      node.difficulty || 'Beginner', prereqsStr, tagsStr, node.estimatedTime || 20];
+    if (existing?.length) {
+      if (actor.role !== 'admin' && (existing[0].created_by !== actor.id || !existing[0].is_custom)) return false;
+      const ownerPredicate = actor.role === 'admin' ? '' : ' AND created_by = ? AND is_custom = TRUE';
+      await db.query(
+        `UPDATE curriculum_nodes SET subject = ?, grade = ?, title = ?, category = ?, description = ?, difficulty = ?,
+         prerequisites_json = ?, tags_json = ?, estimated_time = ? WHERE id = ?${ownerPredicate}`,
+        [...values, node.id, ...(actor.role === 'admin' ? [] : [actor.id])],
+      );
+    } else {
+      // A racing insert is rejected by the primary key, never converted into an overwrite.
+      await db.query(
+        `INSERT INTO curriculum_nodes
+         (id, subject, grade, title, category, description, difficulty, prerequisites_json, tags_json, estimated_time, created_by, is_custom)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+        [node.id, ...values, actor.id],
+      );
+    }
     return true;
   } catch (err) {
-    console.error('Error saving curriculum node to DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error saving curriculum node to DB:', databaseErrorCode(err));
     return false;
   }
 }
@@ -1428,13 +1521,16 @@ export async function saveCurriculumNodeToDb(node: {
 /**
  * Delete a custom curriculum node from MySQL
  */
-export async function deleteCurriculumNodeFromDb(nodeId: string): Promise<boolean> {
+export async function deleteCurriculumNodeFromDb(nodeId: string, actor?: SecurityPrincipal): Promise<boolean> {
+  if (!canManageCurriculum(actor)) throw new ResourceAccessError();
   try {
     const db = getDbPool();
-    await db.query(`DELETE FROM curriculum_nodes WHERE id = ?`, [nodeId]);
-    return true;
+    const predicate = actor.role === 'admin' ? '' : ' AND created_by = ? AND is_custom = TRUE';
+    const [result]: any = await db.query(`DELETE FROM curriculum_nodes WHERE id = ?${predicate}`, [nodeId, ...(actor.role === 'admin' ? [] : [actor.id])]);
+    return result.affectedRows > 0;
   } catch (err) {
-    console.error('Error deleting curriculum node from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error deleting curriculum node from DB:', databaseErrorCode(err));
     return false;
   }
 }
@@ -1634,15 +1730,23 @@ export async function calibrateStudentDiagnosticInDb(params: {
 /**
  * Permanently delete a student from cohort_students, student_progress, and users
  */
-export async function deleteCohortStudentFromDb(studentId: string): Promise<boolean> {
+export async function deleteCohortStudentFromDb(studentId: string, actor?: SecurityPrincipal): Promise<boolean> {
+  if (!canManageStudents(actor)) throw new ResourceAccessError();
   try {
-    const db = getDbPool();
-    await db.query(`DELETE FROM cohort_students WHERE id = ?`, [studentId]);
-    await db.query(`DELETE FROM student_progress WHERE user_id = ?`, [studentId]);
-    await db.query(`DELETE FROM users WHERE id = ?`, [studentId]);
-    return true;
+    return await withTransaction(async (db) => {
+      const scope = actor.role === 'admin' ? '' : ' AND u.institution_id = ?';
+      const args = [studentId, ...(actor.role === 'admin' ? [] : [actor.institutionId])];
+      const [students]: any = await db.query(`SELECT u.id FROM users u WHERE u.id = ? AND u.role = 'student'${scope} FOR UPDATE`, args);
+      if (!students?.length) return false;
+      await db.query(`DELETE q FROM quiz_attempts q JOIN users u ON u.id = q.user_id WHERE u.id = ? AND u.role = 'student'${scope}`, args);
+      await db.query(`DELETE p FROM student_progress p JOIN users u ON u.id = p.user_id WHERE u.id = ? AND u.role = 'student'${scope}`, args);
+      await db.query(`DELETE c FROM cohort_students c JOIN users u ON u.id = c.id WHERE u.id = ? AND u.role = 'student'${scope}`, args);
+      const [result]: any = await db.query(`DELETE u FROM users u WHERE u.id = ? AND u.role = 'student'${scope}`, args);
+      return result.affectedRows > 0;
+    });
   } catch (err) {
-    console.error('Error deleting student from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error deleting student from DB:', databaseErrorCode(err));
     return false;
   }
 }
@@ -1663,53 +1767,64 @@ export async function enrollStudentInCohortDb(params: {
   institution?: string;
   institutionId?: string;
   institutionCode?: string;
-}): Promise<{ success: boolean; student: any }> {
+}, actor?: SecurityPrincipal): Promise<{ success: boolean; student: any; error?: string }> {
+  if (!canManageStudents(actor)) throw new ResourceAccessError();
   try {
-    const db = getDbPool();
+    return await withTransaction(async (db) => {
     const cleanName = (params.name || '').trim();
-    const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const cleanEmail = (params.email || `${slug}@student.learnx.org`).toLowerCase().trim();
-
-    // Resolve institution from code if provided
-    let instName = params.institution;
-    let instId = params.institutionId;
-    let instCode = params.institutionCode ? params.institutionCode.trim().toUpperCase() : undefined;
-
-    if (instCode && (!instName || !instId)) {
-      const [matchedInst]: any = await db.query(
-        `SELECT * FROM institutions WHERE UPPER(code) = ? LIMIT 1`,
-        [instCode]
+    if (!cleanName) return { success: false, student: null, error: 'Student name is required' };
+    const candidateId = params.id || `stu_${crypto.randomUUID()}`;
+    const cleanEmail = (params.email || `${candidateId}@student.learnx.org`).toLowerCase().trim();
+    const targetInstitutionId = actor.role === 'admin' ? params.institutionId : actor.institutionId;
+    if (actor.role !== 'admin' && params.institutionId && params.institutionId !== actor.institutionId) throw new ResourceAccessError();
+    let resolvedInst: string | null = null;
+    let resolvedInstId: string | null = null;
+    let resolvedInstCode: string | null = null;
+    if (targetInstitutionId || params.institutionCode) {
+      const [institutions]: any = await db.query(
+        `SELECT id, code, name, status FROM institutions WHERE ${targetInstitutionId ? 'id = ?' : 'UPPER(code) = ?'} LIMIT 1`,
+        [targetInstitutionId || params.institutionCode!.trim().toUpperCase()],
       );
-      if (matchedInst && matchedInst[0]) {
-        instId = matchedInst[0].id;
-        instCode = matchedInst[0].code;
-        instName = matchedInst[0].name;
-      }
+      const institution = institutions?.[0];
+      if (!institution || institution.status !== 'active' ||
+          (params.institutionCode && institution.code.toUpperCase() !== params.institutionCode.trim().toUpperCase())) throw new ResourceAccessError();
+      resolvedInst = institution.name;
+      resolvedInstId = institution.id;
+      resolvedInstCode = institution.code;
     }
-    const resolvedInst = instName || 'Delhi Public School';
-    const resolvedInstId = instId || 'inst-dps-2026';
-    const resolvedInstCode = instCode || 'DPS2026';
 
-    // Check if user already exists with this email to prevent duplicate or conflicting entries
+    // Lock by BOTH identifiers. An email/ID collision must never adopt another
+    // account, promote a staff account, or move a student between tenants.
     const [existingUsers]: any = await db.query(
-      `SELECT id, student_id FROM users WHERE email = ? LIMIT 1`,
-      [cleanEmail]
+      `SELECT id, email, role, institution_id, student_id FROM users WHERE id = ? OR LOWER(email) = ? LIMIT 2 FOR UPDATE`,
+      [candidateId, cleanEmail]
     );
-    const userId = params.id || (existingUsers && existingUsers[0] ? existingUsers[0].id : `stu_${slug || Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
-    const studentId = params.studentId || (existingUsers && existingUsers[0]?.student_id ? existingUsers[0].student_id : `STU-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+    const existing = existingUsers?.[0];
+    if (existingUsers?.length > 1 || (existing && (existing.role !== 'student' ||
+        (existing.institution_id || null) !== resolvedInstId || (params.id && existing.id !== params.id)))) throw new ResourceAccessError();
+    const userId = existing?.id || candidateId;
+    const resolvedEmail = existing?.email || cleanEmail;
+    const [cohortRows]: any = await db.query('SELECT institution_id FROM cohort_students WHERE id = ? FOR UPDATE', [userId]);
+    if (cohortRows?.length && (cohortRows[0].institution_id || null) !== resolvedInstId) throw new ResourceAccessError();
+    const studentId = existing?.student_id || params.studentId || `STU-${crypto.randomUUID()}`;
     const normGrade = normalizeGradeName(params.grade || 'Class 10');
     const interest = params.interest || 'Cricket & Sports';
     const avatar = params.avatar || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80`;
-    const mastery = Number(params.overallMastery) || 50;
+    const mastery = params.overallMastery === undefined ? 0 : Math.max(0, Math.min(100, Number(params.overallMastery) || 0));
     const status = params.status || 'New Enrollee';
 
-    // 1. Insert into users table
-    await db.query(
-      `INSERT INTO users (id, name, email, role, student_id, grade, interest, streak_count, avatar, institution, institution_id, institution_code)
-       VALUES (?, ?, ?, 'student', ?, ?, ?, 1, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE name = VALUES(name), grade = VALUES(grade), interest = VALUES(interest), institution = VALUES(institution), institution_id = VALUES(institution_id), institution_code = VALUES(institution_code)`,
-      [userId, cleanName, cleanEmail, studentId, normGrade, interest, avatar, resolvedInst, resolvedInstId, resolvedInstCode]
-    );
+    if (existing) {
+      await db.query(
+        `UPDATE users SET name = ?, grade = ?, interest = ?, avatar = ? WHERE id = ? AND role = 'student' AND institution_id <=> ?`,
+        [cleanName, normGrade, interest, avatar, userId, resolvedInstId],
+      );
+    } else {
+      await db.query(
+        `INSERT INTO users (id, name, email, role, student_id, grade, interest, streak_count, avatar, institution, institution_id, institution_code)
+         VALUES (?, ?, ?, 'student', ?, ?, ?, 1, ?, ?, ?, ?)`,
+        [userId, cleanName, cleanEmail, studentId, normGrade, interest, avatar, resolvedInst, resolvedInstId, resolvedInstCode],
+      );
+    }
 
     // 2. Initialize student_progress table
     const cleanConcepts = createCleanConcepts(normGrade);
@@ -1725,13 +1840,13 @@ export async function enrollStudentInCohortDb(params: {
       `INSERT INTO cohort_students (id, name, email, grade, student_id, avatar, overall_mastery, struggling_concept, status, interest, registered_at, is_new_registration, institution, institution_id, institution_code)
        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?, ?, ?)
        ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email), overall_mastery = VALUES(overall_mastery), status = VALUES(status), institution = VALUES(institution), institution_id = VALUES(institution_id), institution_code = VALUES(institution_code)`,
-      [userId, cleanName, cleanEmail, normGrade, studentId, avatar, mastery, status, interest, Date.now(), resolvedInst, resolvedInstId, resolvedInstCode]
+      [userId, cleanName, resolvedEmail, normGrade, studentId, avatar, mastery, status, interest, Date.now(), resolvedInst, resolvedInstId, resolvedInstCode]
     );
 
     const studentRecord = {
       id: userId,
       name: cleanName,
-      email: cleanEmail,
+      email: resolvedEmail,
       grade: normGrade,
       studentId,
       avatar,
@@ -1748,9 +1863,11 @@ export async function enrollStudentInCohortDb(params: {
     };
 
     return { success: true, student: studentRecord };
+    });
   } catch (err) {
-    console.error('Error enrolling student in DB:', err);
-    return { success: false, student: null };
+    rethrowSecurityError(err);
+    console.error('Error enrolling student in DB:', databaseErrorCode(err));
+    return { success: false, student: null, error: 'Unable to enroll student' };
   }
 }
 
@@ -1771,7 +1888,7 @@ export async function getCurriculumBottlenecksFromDb(institutionId?: string): Pr
     const db = getDbPool();
 
     const joinClause = institutionId ? 'JOIN users u ON q.user_id = u.id' : '';
-    const whereClause = institutionId ? 'WHERE u.institution_id = ?' : '';
+    const whereClause = institutionId ? "WHERE u.institution_id = ? AND u.role = 'student'" : '';
     const queryParams = institutionId ? [institutionId] : [];
 
     // 1. Check quiz attempt failure rates grouped by concept
@@ -1789,12 +1906,13 @@ export async function getCurriculumBottlenecksFromDb(institutionId?: string): Pr
 
     // 2. Check current student struggle concepts
     const [struggleRows]: any = await db.query(`
-      SELECT struggling_concept, COUNT(*) as studentCount
-      FROM cohort_students
-      WHERE struggling_concept IS NOT NULL AND struggling_concept != ''
-      GROUP BY struggling_concept
+      SELECT c.struggling_concept, COUNT(*) as studentCount
+      FROM cohort_students c JOIN users u ON u.id = c.id
+      WHERE c.struggling_concept IS NOT NULL AND c.struggling_concept != '' AND u.role = 'student'
+        ${institutionId ? 'AND u.institution_id = ?' : ''}
+      GROUP BY c.struggling_concept
       ORDER BY studentCount DESC
-    `);
+    `, queryParams);
 
     const bottleneckMap = new Map<string, { failureRate: number; affectedLearnersCount: number }>();
 
@@ -1857,8 +1975,10 @@ export async function getCurriculumBottlenecksFromDb(institutionId?: string): Pr
 
     // Count at-risk students
     const [atRiskRows]: any = await db.query(`
-      SELECT COUNT(*) as cnt FROM cohort_students WHERE status = 'Needs Intervention' OR overall_mastery < 60
-    `);
+      SELECT COUNT(*) as cnt FROM cohort_students c JOIN users u ON u.id = c.id
+      WHERE (c.status = 'Needs Intervention' OR c.overall_mastery < 60) AND u.role = 'student'
+        ${institutionId ? 'AND u.institution_id = ?' : ''}
+    `, queryParams);
     const atRiskCount = Number(atRiskRows?.[0]?.cnt) || 0;
 
     return {
@@ -1867,7 +1987,8 @@ export async function getCurriculumBottlenecksFromDb(institutionId?: string): Pr
       atRiskCount,
     };
   } catch (err) {
-    console.error('Error getting bottlenecks from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting bottlenecks from DB:', databaseErrorCode(err));
     return {
       bottlenecks: [],
       velocityGain: null,
@@ -1883,57 +2004,61 @@ export async function deployTeacherInterventionInDb(params: {
   conceptTitle: string;
   subject?: string;
   teacherId?: string;
-}): Promise<{ success: boolean; impactedCount: number }> {
+}, actor?: SecurityPrincipal): Promise<{ success: boolean; impactedCount: number }> {
+  if (!canManageStudents(actor)) throw new ResourceAccessError();
   try {
     const db = getDbPool();
     const { conceptTitle } = params;
 
-    // 1. Fetch all student progress records
-    const [students]: any = await db.query(`SELECT user_id, concepts_json FROM student_progress`);
+    const scope = actor.role === 'admin' ? '' : ' AND u.institution_id = ?';
+    const scopeParams = actor.role === 'admin' ? [] : [actor.institutionId];
+    const [students]: any = await db.query(
+      `SELECT p.user_id, p.concepts_json FROM student_progress p JOIN users u ON u.id = p.user_id WHERE u.role = 'student'${scope}`,
+      scopeParams,
+    );
     let impactedCount = 0;
 
     for (const student of students || []) {
       if (!student.concepts_json) continue;
-      try {
-        const conceptsMap: Record<string, ConceptNode[]> = JSON.parse(student.concepts_json);
-        let modified = false;
+      let conceptsMap: Record<string, ConceptNode[]>;
+      try { conceptsMap = JSON.parse(student.concepts_json); } catch { continue; }
+      let modified = false;
 
-        Object.keys(conceptsMap).forEach((subj) => {
-          conceptsMap[subj] = conceptsMap[subj].map((c) => {
-            if (c.title.toLowerCase().includes(conceptTitle.toLowerCase()) || conceptTitle.toLowerCase().includes(c.title.toLowerCase())) {
-              if (c.status !== 'mastered') {
-                c.status = 'remediation';
-                modified = true;
-              }
+      Object.keys(conceptsMap).forEach((subj) => {
+        if (params.subject && subj !== params.subject) return;
+        conceptsMap[subj] = conceptsMap[subj].map((c) => {
+          if (c.title.toLowerCase().includes(conceptTitle.toLowerCase()) || conceptTitle.toLowerCase().includes(c.title.toLowerCase())) {
+            if (c.status !== 'mastered') {
+              c.status = 'remediation';
+              modified = true;
             }
-            return c;
-          });
+          }
+          return c;
         });
+      });
 
-        if (modified) {
-          impactedCount++;
-          await db.query(
-            `UPDATE student_progress 
-             SET concepts_json = ?, struggling_concept = ?, status = 'Needs Intervention', updated_at = NOW() 
-             WHERE user_id = ?`,
-            [JSON.stringify(conceptsMap), conceptTitle, student.user_id]
-          );
-
-          await db.query(
-            `UPDATE cohort_students 
-             SET struggling_concept = ?, status = 'Needs Intervention' 
-             WHERE id = ?`,
-            [conceptTitle, student.user_id]
-          );
-        }
-      } catch (e) {
-        // Skip parsing errors
+      if (modified) {
+        const [result]: any = await db.query(
+          `UPDATE student_progress p JOIN users u ON u.id = p.user_id
+           SET p.concepts_json = ?, p.struggling_concept = ?, p.status = 'Needs Intervention', p.updated_at = NOW()
+           WHERE u.id = ? AND u.role = 'student'${scope}`,
+          [JSON.stringify(conceptsMap), conceptTitle, student.user_id, ...scopeParams]
+        );
+        if (!result.affectedRows) continue;
+        impactedCount++;
+        await db.query(
+          `UPDATE cohort_students c JOIN users u ON u.id = c.id
+           SET c.struggling_concept = ?, c.status = 'Needs Intervention'
+           WHERE u.id = ? AND u.role = 'student'${scope}`,
+          [conceptTitle, student.user_id, ...scopeParams]
+        );
       }
     }
 
-    return { success: true, impactedCount: Math.max(1, impactedCount) };
+    return { success: true, impactedCount };
   } catch (err) {
-    console.error('Error deploying teacher intervention to DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error deploying teacher intervention to DB:', databaseErrorCode(err));
     return { success: false, impactedCount: 0 };
   }
 }
@@ -1970,12 +2095,12 @@ export async function logSystemAction(params: {
         params.actorName || 'System',
         params.targetType || null,
         params.targetId || null,
-        params.details ? JSON.stringify(params.details) : null,
+        params.details === undefined ? null : JSON.stringify(redactAuditDetails(params.details)),
         params.ipAddress || '127.0.0.1',
       ]
     );
   } catch (err) {
-    console.warn('Could not write to system_audit_logs:', err);
+    console.warn('Could not write to system_audit_logs:', databaseErrorCode(err));
   }
 }
 
@@ -1993,9 +2118,22 @@ export async function getSystemSettingsFromDb(): Promise<any> {
       });
     }
 
+    let storedGeminiApiKey = settingsMap.gemini_api_key || '';
+    if (storedGeminiApiKey && storedGeminiApiKey.startsWith(ENCRYPTED_SETTING_PREFIX)) {
+      storedGeminiApiKey = decryptSecretSetting(storedGeminiApiKey);
+    } else if (storedGeminiApiKey && process.env.JWT_SECRET) {
+      // Migrate an older plaintext setting once, then keep the plaintext only
+      // in server memory for the current process.
+      const encrypted = encryptSecretSetting(storedGeminiApiKey);
+      await db.query(
+        `UPDATE system_settings SET setting_value = ?, updated_at = NOW() WHERE setting_key = 'gemini_api_key'`,
+        [encrypted],
+      );
+    }
+
     return {
       geminiEnabled: settingsMap.gemini_enabled !== 'false',
-      geminiApiKey: settingsMap.gemini_api_key || process.env.GEMINI_API_KEY ,
+      geminiApiKey: process.env.GEMINI_API_KEY || storedGeminiApiKey || undefined,
       geminiModel: settingsMap.gemini_model || 'gemini-2.5-flash',
       geminiModelPriority: settingsMap.gemini_model_priority
         ? JSON.parse(settingsMap.gemini_model_priority)
@@ -2005,7 +2143,8 @@ export async function getSystemSettingsFromDb(): Promise<any> {
       announcementBanner: settingsMap.announcement_banner || '',
     };
   } catch (err) {
-    console.error('Error fetching system settings from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching system settings from DB:', databaseErrorCode(err));
     return {
       geminiEnabled: true,
       geminiApiKey: process.env.GEMINI_API_KEY ,
@@ -2025,11 +2164,12 @@ export async function saveSystemSettingToDb(key: string, value: any, actorName =
   try {
     const db = getDbPool();
     const strVal = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    const storedValue = key === 'gemini_api_key' ? encryptSecretSetting(strVal) : strVal;
     await db.query(
       `INSERT INTO system_settings (setting_key, setting_value)
        VALUES (?, ?)
        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = NOW()`,
-      [key, strVal]
+      [key, storedValue]
     );
 
     await logSystemAction({
@@ -2042,7 +2182,8 @@ export async function saveSystemSettingToDb(key: string, value: any, actorName =
 
     return true;
   } catch (err) {
-    console.error('Error saving system setting to DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error saving system setting to DB:', databaseErrorCode(err));
     return false;
   }
 }
@@ -2161,7 +2302,8 @@ export async function getAllUsersFromDb(filters: {
       total,
     };
   } catch (err) {
-    console.error('Error fetching users from DB:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching users from DB:', databaseErrorCode(err));
     return { users: [], total: 0 };
   }
 }
@@ -2218,9 +2360,9 @@ export async function adminCreateUser(userData: {
         instName = matchedInst[0].name;
       }
     }
-    const resolvedInst = instName || (role === 'admin' ? 'LearnX Central Operations' : 'Delhi Public School');
-    const resolvedInstId = instId || (role === 'admin' ? undefined : 'inst-dps-2026');
-    const resolvedInstCode = instCode || (role === 'admin' ? undefined : 'DPS2026');
+    const resolvedInst = instName || (role === 'admin' ? 'LearnX Central Operations' : null);
+    const resolvedInstId = instId || undefined;
+    const resolvedInstCode = instCode || undefined;
 
     await db.query(
       `INSERT INTO users (id, name, email, role, student_id, teacher_id, grade, institution, institution_id, institution_code, department, interest, avatar)
@@ -2282,8 +2424,9 @@ export async function adminCreateUser(userData: {
       },
     };
   } catch (err: any) {
-    console.error('Error in adminCreateUser:', err);
-    return { success: false, error: err.message || 'Database error creating user' };
+    rethrowSecurityError(err);
+    console.error('Error in adminCreateUser:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to create user' };
   }
 }
 
@@ -2404,8 +2547,9 @@ export async function adminUpdateUser(
 
     return { success: true };
   } catch (err: any) {
-    console.error('Error in adminUpdateUser:', err);
-    return { success: false, error: err.message || 'Database error updating user' };
+    rethrowSecurityError(err);
+    console.error('Error in adminUpdateUser:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to update user' };
   }
 }
 
@@ -2437,8 +2581,9 @@ export async function adminDeleteUser(userId: string, actorName = 'Admin'): Prom
 
     return { success: true };
   } catch (err: any) {
-    console.error('Error in adminDeleteUser:', err);
-    return { success: false, error: err.message || 'Database error deleting user' };
+    rethrowSecurityError(err);
+    console.error('Error in adminDeleteUser:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to delete user' };
   }
 }
 
@@ -2525,7 +2670,8 @@ export async function getQuestionBankFromDb(filters: {
       createdAt: r.created_at,
     }));
   } catch (err) {
-    console.error('Error fetching question bank:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching question bank:', databaseErrorCode(err));
     return [];
   }
 }
@@ -2575,7 +2721,8 @@ export async function saveQuestionToBank(qData: any, actorName = 'Admin'): Promi
 
     return { success: true, id };
   } catch (err: any) {
-    console.error('Error saving question to bank:', err);
+    rethrowSecurityError(err);
+    console.error('Error saving question to bank:', databaseErrorCode(err));
     return { success: false, id: '' };
   }
 }
@@ -2594,7 +2741,8 @@ export async function deleteQuestionFromBank(id: string, actorName = 'Admin'): P
 
     return { success: true };
   } catch (err) {
-    console.error('Error deleting question from bank:', err);
+    rethrowSecurityError(err);
+    console.error('Error deleting question from bank:', databaseErrorCode(err));
     return { success: false };
   }
 }
@@ -2686,7 +2834,8 @@ export async function getAdminStatsFromDb(): Promise<any> {
       recentLogs,
     };
   } catch (err) {
-    console.error('Error fetching admin stats:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching admin stats:', databaseErrorCode(err));
     return {
       kpi: {
         totalUsers: 8,
@@ -2723,7 +2872,8 @@ export async function getAuditLogsFromDb(limit = 50): Promise<any[]> {
       createdAt: r.created_at,
     }));
   } catch (err) {
-    console.error('Error fetching audit logs:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching audit logs:', databaseErrorCode(err));
     return [];
   }
 }
@@ -2775,7 +2925,7 @@ export async function getAllInstitutionsFromDb(filters: {
         COUNT(DISTINCT CASE WHEN u.role = 'teacher' THEN u.id END) as teacherCount,
         COUNT(DISTINCT CASE WHEN u.role = 'student' THEN u.id END) as studentCount
        FROM institutions i
-       LEFT JOIN users u ON (u.institution_id = i.id OR UPPER(u.institution_code) = UPPER(i.code) OR LOWER(u.institution) = LOWER(i.name))
+        LEFT JOIN users u ON u.institution_id = i.id
        WHERE ${conditions.join(' AND ')}
        GROUP BY i.id
        ORDER BY i.created_at DESC
@@ -2802,7 +2952,8 @@ export async function getAllInstitutionsFromDb(filters: {
 
     return { institutions, total, page, limit };
   } catch (err) {
-    console.error('Error fetching institutions:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching institutions:', databaseErrorCode(err));
     return { institutions: [], total: 0, page: 1, limit: 50 };
   }
 }
@@ -2819,7 +2970,7 @@ export async function getInstitutionById(id: string): Promise<Institution | null
         COUNT(DISTINCT CASE WHEN u.role = 'teacher' THEN u.id END) as teacherCount,
         COUNT(DISTINCT CASE WHEN u.role = 'student' THEN u.id END) as studentCount
        FROM institutions i
-       LEFT JOIN users u ON (u.institution_id = i.id OR UPPER(u.institution_code) = UPPER(i.code) OR LOWER(u.institution) = LOWER(i.name))
+        LEFT JOIN users u ON u.institution_id = i.id
        WHERE i.id = ?
        GROUP BY i.id
        LIMIT 1`,
@@ -2844,7 +2995,8 @@ export async function getInstitutionById(id: string): Promise<Institution | null
       updatedAt: r.updated_at,
     };
   } catch (err) {
-    console.error('Error getting institution by id:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting institution by id:', databaseErrorCode(err));
     return null;
   }
 }
@@ -2862,7 +3014,7 @@ export async function getInstitutionByCode(code: string): Promise<Institution | 
         COUNT(DISTINCT CASE WHEN u.role = 'teacher' THEN u.id END) as teacherCount,
         COUNT(DISTINCT CASE WHEN u.role = 'student' THEN u.id END) as studentCount
        FROM institutions i
-       LEFT JOIN users u ON (u.institution_id = i.id OR UPPER(u.institution_code) = UPPER(i.code) OR LOWER(u.institution) = LOWER(i.name))
+        LEFT JOIN users u ON u.institution_id = i.id
        WHERE UPPER(i.code) = ?
        GROUP BY i.id
        LIMIT 1`,
@@ -2887,7 +3039,8 @@ export async function getInstitutionByCode(code: string): Promise<Institution | 
       updatedAt: r.updated_at,
     };
   } catch (err) {
-    console.error('Error getting institution by code:', err);
+    rethrowSecurityError(err);
+    console.error('Error getting institution by code:', databaseErrorCode(err));
     return null;
   }
 }
@@ -2916,7 +3069,8 @@ export async function createInstitution(data: {
     const slug = cleanName.toLowerCase().replace(/[^a-z0-9]/g, '_');
     const id = data.id?.trim() || `inst_${slug}_${Math.random().toString(36).substring(2, 6)}`;
     const status = data.status || 'active';
-    const password = data.password || 'learnx@123';
+    if (data.password !== undefined && data.password !== '') assertSupportedPassword(data.password);
+    const passwordHash = data.password ? await bcrypt.hash(data.password, PASSWORD_HASH_ROUNDS) : null;
 
     // Verify code uniqueness
     const [existing]: any = await db.query(`SELECT id FROM institutions WHERE UPPER(code) = ? LIMIT 1`, [cleanCode]);
@@ -2925,14 +3079,15 @@ export async function createInstitution(data: {
     }
 
     await db.query(
-      `INSERT INTO institutions (id, code, name, email, password, contact_person, phone, address, city, state, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO institutions (id, code, name, email, password_hash, needs_password, contact_person, phone, address, city, state, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         cleanCode,
         cleanName,
         cleanEmail,
-        password,
+        passwordHash,
+        passwordHash ? false : true,
         data.contactPerson?.trim() || null,
         data.phone?.trim() || null,
         data.address?.trim() || null,
@@ -2953,8 +3108,9 @@ export async function createInstitution(data: {
     const created = await getInstitutionById(id);
     return { success: true, institution: created };
   } catch (err: any) {
-    console.error('Error in createInstitution:', err);
-    return { success: false, error: err.message || 'Database error creating institution' };
+    rethrowSecurityError(err);
+    console.error('Error in createInstitution:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to create institution' };
   }
 }
 
@@ -2997,8 +3153,9 @@ export async function updateInstitution(id: string, data: {
       params.push(data.email.trim().toLowerCase());
     }
     if (data.password) {
-      updates.push('password = ?');
-      params.push(data.password);
+      assertSupportedPassword(data.password);
+      updates.push('password_hash = ?', 'needs_password = FALSE', 'password = NULL');
+      params.push(await bcrypt.hash(data.password, PASSWORD_HASH_ROUNDS));
     }
     if (data.contactPerson !== undefined) {
       updates.push('contact_person = ?');
@@ -3041,8 +3198,9 @@ export async function updateInstitution(id: string, data: {
     const updated = await getInstitutionById(id);
     return { success: true, institution: updated };
   } catch (err: any) {
-    console.error('Error in updateInstitution:', err);
-    return { success: false, error: err.message || 'Database error updating institution' };
+    rethrowSecurityError(err);
+    console.error('Error in updateInstitution:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to update institution' };
   }
 }
 
@@ -3062,12 +3220,12 @@ export async function deleteInstitution(id: string, actorName = 'Admin'): Promis
     // Unlink users associated with this institution
     if (inst) {
       await db.query(
-        `UPDATE users SET institution_id = NULL, institution_code = NULL WHERE institution_id = ? OR institution_code = ?`,
-        [id, inst.code]
+        `UPDATE users SET institution_id = NULL, institution_code = NULL, institution = NULL WHERE institution_id = ?`,
+        [id]
       );
       await db.query(
-        `UPDATE cohort_students SET institution_id = NULL, institution_code = NULL WHERE institution_id = ? OR institution_code = ?`,
-        [id, inst.code]
+        `UPDATE cohort_students SET institution_id = NULL, institution_code = NULL, institution = NULL WHERE institution_id = ?`,
+        [id]
       );
     }
 
@@ -3081,8 +3239,9 @@ export async function deleteInstitution(id: string, actorName = 'Admin'): Promis
 
     return { success: true };
   } catch (err: any) {
-    console.error('Error in deleteInstitution:', err);
-    return { success: false, error: err.message || 'Database error deleting institution' };
+    rethrowSecurityError(err);
+    console.error('Error in deleteInstitution:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to delete institution' };
   }
 }
 
@@ -3107,10 +3266,10 @@ export async function getInstitutionMembers(institutionId: string): Promise<{
               u.institution_id as institutionId, u.institution_code as institutionCode,
               u.created_at as createdAt, u.avatar
        FROM users u
-       WHERE (u.institution_id = ? OR UPPER(u.institution_code) = UPPER(?) OR LOWER(u.institution) = LOWER(?))
+        WHERE u.institution_id = ?
          AND u.role = 'teacher'
        ORDER BY u.name ASC`,
-      [inst.id, inst.code, inst.name]
+      [inst.id]
     );
 
     // Get students
@@ -3124,10 +3283,10 @@ export async function getInstitutionMembers(institutionId: string): Promise<{
        FROM users u
        LEFT JOIN student_progress p ON u.id = p.user_id
        LEFT JOIN cohort_students c ON u.id = c.id
-       WHERE (u.institution_id = ? OR UPPER(u.institution_code) = UPPER(?) OR LOWER(u.institution) = LOWER(?))
+        WHERE u.institution_id = ?
          AND u.role = 'student'
        ORDER BY u.name ASC`,
-      [inst.id, inst.code, inst.name]
+      [inst.id]
     );
 
     return {
@@ -3136,7 +3295,8 @@ export async function getInstitutionMembers(institutionId: string): Promise<{
       students: students || [],
     };
   } catch (err) {
-    console.error('Error fetching institution members:', err);
+    rethrowSecurityError(err);
+    console.error('Error fetching institution members:', databaseErrorCode(err));
     return { institution: null, teachers: [], students: [] };
   }
 }
@@ -3178,8 +3338,9 @@ export async function addInstitutionMember(institutionId: string, memberData: {
 
     return created;
   } catch (err: any) {
-    console.error('Error adding institution member:', err);
-    return { success: false, error: err.message || 'Failed to add institution member' };
+    rethrowSecurityError(err);
+    console.error('Error adding institution member:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to add institution member' };
   }
 }
 
@@ -3188,15 +3349,24 @@ export async function addInstitutionMember(institutionId: string, memberData: {
  */
 export async function removeInstitutionMember(institutionId: string, userId: string, actorName = 'Admin'): Promise<{ success: boolean; error?: string }> {
   try {
-    const db = getDbPool();
-    await db.query(
-      `UPDATE users SET institution_id = NULL, institution_code = NULL WHERE id = ?`,
-      [userId]
-    );
-    await db.query(
-      `UPDATE cohort_students SET institution_id = NULL, institution_code = NULL WHERE id = ?`,
-      [userId]
-    );
+    if (!institutionId || !userId) throw new ResourceAccessError();
+    const removed = await withTransaction(async (db) => {
+      const [rows]: any = await db.query(
+        `SELECT id FROM users WHERE id = ? AND institution_id = ? AND role IN ('student', 'teacher') FOR UPDATE`,
+        [userId, institutionId],
+      );
+      if (!rows?.length) return false;
+      await db.query(
+        `UPDATE cohort_students SET institution_id = NULL, institution_code = NULL, institution = NULL WHERE id = ? AND institution_id = ?`,
+        [userId, institutionId],
+      );
+      const [result]: any = await db.query(
+        `UPDATE users SET institution_id = NULL, institution_code = NULL, institution = NULL WHERE id = ? AND institution_id = ? AND role IN ('student', 'teacher')`,
+        [userId, institutionId],
+      );
+      return result.affectedRows > 0;
+    });
+    if (!removed) return { success: false, error: 'Member not found in this institution' };
     await logSystemAction({
       action: 'REMOVE_INSTITUTION_MEMBER',
       actorName,
@@ -3206,8 +3376,9 @@ export async function removeInstitutionMember(institutionId: string, userId: str
     });
     return { success: true };
   } catch (err: any) {
-    console.error('Error removing institution member:', err);
-    return { success: false, error: err.message || 'Failed to remove member' };
+    rethrowSecurityError(err);
+    console.error('Error removing institution member:', databaseErrorCode(err));
+    return { success: false, error: 'Unable to remove institution member' };
   }
 }
 
@@ -3223,24 +3394,24 @@ export async function institutionLogin(codeOrEmail: string, password?: string): 
   try {
     const db = getDbPool();
     const term = (codeOrEmail || '').trim();
+    if (!isSupportedPassword(password)) return { success: false, error: 'Invalid credentials' };
+    const byEmail = term.includes('@');
     const [rows]: any = await db.query(
-      `SELECT * FROM institutions 
-       WHERE UPPER(code) = ? OR LOWER(email) = ?
-       LIMIT 1`,
-      [term.toUpperCase(), term.toLowerCase()]
+      `SELECT id, code, name, email, status, password_hash, needs_password, created_at FROM institutions
+       WHERE ${byEmail ? 'LOWER(email)' : 'UPPER(code)'} = ? LIMIT 2`,
+      [byEmail ? term.toLowerCase() : term.toUpperCase()]
     );
 
-    if (!rows || rows.length === 0) {
-      return { success: false, error: 'No institution found with this code or email.' };
+    if (!rows || rows.length !== 1) {
+      return { success: false, error: 'Invalid credentials' };
     }
 
     const inst = rows[0];
-    if (inst.status === 'suspended') {
+    if (inst.status !== 'active') {
       return { success: false, error: 'This institution account is currently suspended. Please contact platform support.' };
     }
 
-    // If password provided and inst.password exists, verify match (allow learnx@123 as demo passkey)
-    if (password && inst.password && password !== inst.password && password !== 'learnx@123') {
+    if (inst.needs_password || !inst.password_hash || !(await bcrypt.compare(password, inst.password_hash))) {
       return { success: false, error: 'Incorrect institution passkey.' };
     }
 
@@ -3261,12 +3432,13 @@ export async function institutionLogin(codeOrEmail: string, password?: string): 
 
     return {
       success: true,
-      institution: fullInst || inst,
+      institution: fullInst || { id: inst.id, name: inst.name, email: inst.email, code: inst.code, status: inst.status, createdAt: inst.created_at },
       user: institutionUserProfile,
     };
   } catch (err: any) {
-    console.error('Error in institutionLogin:', err);
-    return { success: false, error: err.message || 'Institution authentication failed' };
+    rethrowSecurityError(err);
+    console.error('Error in institutionLogin:', databaseErrorCode(err));
+    return { success: false, error: 'Institution authentication failed' };
   }
 }
 
@@ -3274,11 +3446,12 @@ export async function institutionLogin(codeOrEmail: string, password?: string): 
 export async function isUserInInstitution(userId: string, institutionId: string): Promise<boolean> {
   try {
     const db = getDbPool();
-    const [rows]: any = await db.query('SELECT institution_id FROM users WHERE id = ? LIMIT 1', [userId]);
+    if (!userId || !institutionId) return false;
+    const [rows]: any = await db.query("SELECT institution_id FROM users WHERE id = ? AND role = 'student' AND institution_id = ? LIMIT 1", [userId, institutionId]);
     if (!rows || rows.length === 0) return false;
     return rows[0].institution_id === institutionId;
   } catch (err) {
-    return false;
+    throw new DatabaseUnavailableError();
   }
 }
 

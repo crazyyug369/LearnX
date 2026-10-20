@@ -14,6 +14,8 @@ import {
   Play,
   Brain,
   RefreshCw,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { ConceptNode, Question, MasteryBreakdown, TeachingStrategy } from '../types';
 import { calculateMastery, getNextRecommendedStrategy } from '../utils/adaptiveEngine';
@@ -65,10 +67,15 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [answersLog, setAnswersLog] = useState<AnswerLogEntry[]>([]);
   const [ncertRecommendations, setNcertRecommendations] = useState<string[]>([]);
+  const [questionStatus, setQuestionStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [recommendationError, setRecommendationError] = useState<string | null>(null);
 
   // Automatically fetch dynamic Bloom's questions whenever concept or student interest changes
   const fetchAiQuestions = async (isManual = false) => {
     setIsGeneratingQuestions(true);
+    setQuestionStatus(null);
     try {
       const res = await apiFetch('/api/quiz/questions', {
         method: 'POST',
@@ -81,8 +88,8 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
           interest: studentInterest,
         }),
       });
-      if (!res.ok) throw new Error('API Request Failed');
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || data?.message || 'Could not load practice questions.');
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setActiveQuestions(data.questions);
         setCurrentIdx(0);
@@ -90,10 +97,18 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
         setIsSubmitted(false);
         setAnswersLog([]);
         setBreakdown(null);
+        setQuestionStatus({ type: 'success', message: isManual ? 'Fresh practice questions are ready.' : 'Personalized questions are ready.' });
         return;
       }
-    } catch (e) {
+      throw new Error(data?.error || 'The question service returned no questions.');
+    } catch (e: any) {
       console.warn('Could not fetch AI questions:', e);
+      setQuestionStatus({
+        type: 'error',
+        message: questions.length > 0
+          ? 'Personalized questions are unavailable. Showing the saved practice set.'
+          : e?.message || 'Practice questions could not be loaded. Try again.',
+      });
     } finally {
       setIsGeneratingQuestions(false);
     }
@@ -234,6 +249,12 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
 
     setBreakdown(calculated);
     onUpdateConceptMastery(concept.id, calculated);
+    setRecommendationError(null);
+    setSaveMessage(null);
+    setSaveStatus(userId ? 'saving' : 'success');
+    if (!userId) {
+      setSaveMessage('Mastery result is ready.');
+    }
 
     // Persist attempt to MySQL for growth dashboard telemetry
     if (userId) {
@@ -260,10 +281,17 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
           })),
           bloomsBreakdown: calculated.bloomsBreakdown,
         }),
-      }).then(res => {
-        if (!res.ok) throw new Error('API request failed');
+      }).then(async (res) => {
+        const data = await res.json().catch(() => null);
+        if (!res.ok || data?.success === false) throw new Error(data?.error || 'Could not save mastery result.');
+        setSaveStatus('success');
+        setSaveMessage('Mastery result saved successfully.');
         return res;
-      }).catch((err) => console.warn('Failed to sync quiz attempt to DB:', err));
+      }).catch((err: any) => {
+        console.warn('Failed to sync quiz attempt to DB:', err);
+        setSaveStatus('error');
+        setSaveMessage(err?.message || 'Mastery result could not be saved. You can retry the assessment later.');
+      });
     }
 
     // Fetch NCERT Curriculum Graph Next-Concept Recommendations
@@ -278,7 +306,10 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
             setNcertRecommendations(data.recommendations.next_recommended_concepts);
           }
         })
-        .catch((e) => console.warn('Could not fetch recommendations:', e));
+        .catch((e) => {
+          console.warn('Could not fetch recommendations:', e);
+          setRecommendationError('Next-topic recommendations are unavailable right now.');
+        });
     } catch {}
   };
 
@@ -295,6 +326,24 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
     setSelectedOption(null);
     setIsSubmitted(false);
     setActiveSummaryVideoEmbed(null);
+    setConfidence('Medium');
+    setQuestionStatus(null);
+    setSaveStatus('idle');
+    setSaveMessage(null);
+  };
+
+  const requestResetQuiz = () => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        const confirmed = window.confirm('Start this mastery check again? Your current result will be cleared.');
+        // JSDOM returns undefined for its unimplemented confirm; treat that as acceptance
+        // so the component remains testable without weakening real browser cancellation.
+        if (confirmed === false) return;
+      }
+    } catch {
+      // If a browser blocks native confirmation, keep the reset action available.
+    }
+    handleResetQuiz();
   };
 
   const missedQuestions = answersLog.filter((a) => !a.isCorrect);
@@ -364,6 +413,35 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
           </div>
         </div>
       </div>
+
+      {questionStatus && (
+        <div
+          role={questionStatus.type === 'error' ? 'alert' : 'status'}
+          aria-live={questionStatus.type === 'error' ? 'assertive' : 'polite'}
+          className={`flex flex-wrap items-center gap-2 rounded-xl border p-3 text-xs ${
+            questionStatus.type === 'error'
+              ? 'border-amber-200 bg-amber-50 text-amber-900'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          }`}
+        >
+          {questionStatus.type === 'error' ? (
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
+          )}
+          <span>{questionStatus.message}</span>
+          {questionStatus.type === 'error' && (
+            <button
+              type="button"
+              onClick={() => handleFetchAiQuestions()}
+              disabled={isGeneratingQuestions}
+              className="ml-auto rounded-md px-2 py-1 font-semibold underline underline-offset-2 hover:no-underline focus:outline-none focus:ring-2 focus:ring-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isGeneratingQuestions ? 'Retrying...' : 'Retry'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Real-Time Struggle Detection Alert */}
       {struggleDetected && !breakdown && (
@@ -436,11 +514,14 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               }
 
               return (
-                <div
+                <button
                   key={idx}
                   id={`quiz-option-${idx}`}
+                  type="button"
                   onClick={() => handleSelectOption(idx)}
-                  className={`p-4 rounded-xl border text-xs sm:text-sm transition-all cursor-pointer flex items-start gap-3.5 ${optionStyle}`}
+                  disabled={isSubmitted}
+                  aria-pressed={isSelected}
+                  className={`w-full text-left p-4 rounded-xl border text-xs sm:text-sm transition-all cursor-pointer flex items-start gap-3.5 focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1 disabled:cursor-default ${optionStyle}`}
                 >
                   <div
                     className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-serif font-medium shrink-0 mt-0.5 transition-colors ${
@@ -454,7 +535,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
                   <span className="leading-relaxed font-sans">
                     <MathView text={opt} />
                   </span>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -556,6 +637,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               {!isSubmitted ? (
                 <button
                   id="btn-submit-answer"
+                  type="button"
                   onClick={handleSubmitAnswer}
                   disabled={selectedOption === null}
                   className="py-2.5 px-6 bg-[#114B43] hover:bg-[#0D3F38] disabled:bg-stone-200 disabled:text-stone-400 text-white rounded-lg text-xs font-medium transition-all shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
@@ -565,6 +647,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               ) : currentIdx < activeQuestions.length - 1 ? (
                 <button
                   id="btn-next-question"
+                  type="button"
                   onClick={handleNextQuestion}
                   className="py-2.5 px-6 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-medium transition-all flex items-center gap-2 shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-stone-900 focus:ring-offset-1"
                 >
@@ -574,6 +657,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               ) : (
                 <button
                   id="btn-finalize-assessment"
+                  type="button"
                   onClick={handleFinalizeAssessment}
                   className="py-2.5 px-6 bg-[#114B43] hover:bg-[#0D3F38] text-white rounded-lg text-xs font-medium transition-all flex items-center gap-2 shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
                 >
@@ -607,6 +691,29 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               Action: {breakdown.recommendation.replace('_', ' ')}
             </span>
           </div>
+
+          {saveMessage && (
+            <div
+              role={saveStatus === 'error' ? 'alert' : 'status'}
+              aria-live={saveStatus === 'error' ? 'assertive' : 'polite'}
+              className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${
+                saveStatus === 'error'
+                  ? 'border-rose-200 bg-rose-50 text-rose-800'
+                  : saveStatus === 'saving'
+                  ? 'border-stone-200 bg-stone-50 text-stone-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              }`}
+            >
+              {saveStatus === 'saving' ? (
+                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+              ) : saveStatus === 'error' ? (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              ) : (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              )}
+              <span>{saveMessage}</span>
+            </div>
+          )}
 
           {/* Calculated Mastery Score Banner */}
           <div className="p-6 rounded-xl bg-[#1C1917] text-white flex flex-col sm:flex-row items-center justify-between gap-6 shadow-2xs">
@@ -879,15 +986,17 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
                   );
 
                   return (
-                    <div
+                    <button
                       key={idx}
+                      type="button"
                       onClick={() => {
                         if (matchingConcept) onNavigateToConcept(matchingConcept.id);
                       }}
+                      disabled={!matchingConcept}
                       className={`p-3 rounded-lg border text-left transition-all ${
                         matchingConcept
-                          ? 'border-emerald-300 bg-white hover:border-emerald-500 hover:shadow-xs cursor-pointer'
-                          : 'border-stone-200 bg-white/80 opacity-90'
+                          ? 'border-emerald-300 bg-white hover:border-emerald-500 hover:shadow-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1'
+                          : 'border-stone-200 bg-white/80 opacity-90 cursor-default'
                       }`}
                     >
                       <div className="flex items-center justify-between text-[10px] font-mono text-stone-400 mb-1">
@@ -901,19 +1010,27 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
                       <p className="text-xs font-medium text-stone-900 leading-snug line-clamp-2">
                         {recTitle}
                       </p>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
             </div>
           )}
 
+          {recommendationError && (
+            <div role="status" aria-live="polite" className="flex items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-stone-600">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-stone-500" aria-hidden="true" />
+              <span>{recommendationError}</span>
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
-            <button
-              id="btn-retake-quiz"
-              onClick={handleResetQuiz}
-              className="py-2.5 px-4 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-stone-400"
+             <button
+               id="btn-retake-quiz"
+               type="button"
+               onClick={requestResetQuiz}
+               className="py-2.5 px-4 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-stone-400"
             >
               <RotateCcw className="w-3.5 h-3.5" /> Retake Check
             </button>
@@ -922,6 +1039,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               {breakdown.recommendation === 'step_back' && concept.prerequisites.length > 0 && (
                 <button
                   id="btn-goto-prerequisite"
+                  type="button"
                   onClick={() => onNavigateToConcept(concept.prerequisites[0])}
                   className="py-2.5 px-4 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-1"
                 >
@@ -932,6 +1050,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               {breakdown.recommendation === 'change_strategy' && (
                 <button
                   id="btn-change-strategy-rec"
+                  type="button"
                   onClick={() => {
                     const next = getNextRecommendedStrategy(currentStrategy);
                     onChangeStrategy(next);
@@ -945,6 +1064,7 @@ export const AssessmentView: React.FC<AssessmentViewProps> = ({
               {breakdown.recommendation === 'advance' && (
                 <button
                   id="btn-advance-next-concept"
+                  type="button"
                   onClick={() => {
                     const nextConcept = allConcepts.find(
                       (c) => c.status === 'in_progress' || c.status === 'locked'

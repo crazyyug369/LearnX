@@ -13,7 +13,8 @@ export const AdminAccessRestrictedView: React.FC<AdminAccessRestrictedViewProps>
   onAdminAuthenticated,
   onBackToStudent,
 }) => {
-  const [adminKey, setAdminKey] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -23,18 +24,17 @@ export const AdminAccessRestrictedView: React.FC<AdminAccessRestrictedViewProps>
     setIsLoading(true);
 
     try {
-      // Authenticate with admin credentials via standard user enrollment endpoint
-      const res = await fetch('/api/auth/enroll', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: adminKey.includes('@') ? adminKey.trim() : 'admin@learnx.org',
-          name: 'System Administrator',
-          role: 'admin',
+          email: adminEmail.trim(),
+          password: adminPassword,
         }),
       });
 
-      if (!res.ok) throw new Error("API request failed"); const data = await res.json();
+      const data = await res.json();
       if (data.success && data.user && data.user.role === 'admin') {
         onAdminAuthenticated(data.user);
       } else {
@@ -42,30 +42,6 @@ export const AdminAccessRestrictedView: React.FC<AdminAccessRestrictedViewProps>
       }
     } catch (err: any) {
       setErrorMsg('Connection error verifying administrator credentials.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleQuickAdminLogin = async () => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const res = await fetch('/api/auth/enroll', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: 'admin@learnx.org',
-          name: 'System Administrator',
-          role: 'admin',
-        }),
-      });
-      if (!res.ok) throw new Error("API request failed"); const data = await res.json();
-      if (data.success && data.user) {
-        onAdminAuthenticated(data.user);
-      }
-    } catch {
-      setErrorMsg('Failed to authenticate administrator.');
     } finally {
       setIsLoading(false);
     }
@@ -118,16 +94,34 @@ export const AdminAccessRestrictedView: React.FC<AdminAccessRestrictedViewProps>
           <form onSubmit={handleUnlock} className="max-w-md mx-auto space-y-4">
             <div>
               <label className="block text-xs font-semibold text-stone-700 mb-1.5">
-                Admin Email or Secret Key
+                Administrator Email
               </label>
               <div className="relative">
                 <KeyRound className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
-                  type="text"
+                  type="email"
                   required
-                  placeholder="e.g. admin@learnx.org"
-                  value={adminKey}
-                  onChange={(e) => setAdminKey(e.target.value)}
+                  placeholder="Enter the provisioned admin email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-[#114B43]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                Administrator Password
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  placeholder="Enter the administrator password"
                   className="w-full pl-9 pr-3 py-2.5 bg-stone-50 border border-stone-300 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-[#114B43]"
                 />
               </div>
@@ -142,15 +136,6 @@ export const AdminAccessRestrictedView: React.FC<AdminAccessRestrictedViewProps>
               <span>{isLoading ? 'Verifying...' : 'Authenticate as Administrator'}</span>
             </button>
 
-            <div className="pt-2 text-center">
-              <button
-                type="button"
-                onClick={handleQuickAdminLogin}
-                className="text-xs text-[#114B43] hover:underline font-medium cursor-pointer"
-              >
-                1-Click Verified Admin Sign-In (admin@learnx.org)
-              </button>
-            </div>
           </form>
 
           {/* Protected features list */}

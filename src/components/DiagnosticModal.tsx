@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle2, ArrowRight, Zap, Sparkles, Youtube, ExternalLink, ShieldAlert, Award, Clock } from 'lucide-react';
+import { X, CheckCircle2, ArrowRight, Zap, Sparkles, Youtube, ExternalLink, ShieldAlert, Award, Clock, AlertTriangle, Loader2 } from 'lucide-react';
 import { getDiagnosticQuestionsForGrade, DiagnosticQuestion } from '../data/gradeCurriculum';
 import { getYouTubeReferenceForQuestion } from '../utils/youtubeReference';
 import { MathView } from './MathView';
@@ -29,6 +29,8 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
   const [isCompleted, setIsCompleted] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [serverCalibratedMap, setServerCalibratedMap] = useState<any>(null);
+  const [calibrationStatus, setCalibrationStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [usedLocalFallback, setUsedLocalFallback] = useState(false);
 
   // Initialize grade-specific questions whenever modal opens or grade changes
   useEffect(() => {
@@ -39,6 +41,8 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
       setSelectedOptions(new Array(qList.length).fill(null));
       setIsCompleted(false);
       setServerCalibratedMap(null);
+      setCalibrationStatus(null);
+      setUsedLocalFallback(false);
     }
   }, [isOpen, grade, subject]);
 
@@ -52,6 +56,24 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
     setSelectedOptions(updated);
   };
 
+  const requestClose = () => {
+    if (isMandatory) return;
+    const hasProgress = selectedOptions.some((option) => option !== null) || isCompleted;
+    if (!hasProgress) {
+      onClose();
+      return;
+    }
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        const confirmed = window.confirm('Close the diagnostic? Your current answers will be discarded.');
+        if (confirmed === false) return;
+      }
+    } catch {
+      // Keep closing available if native confirmation is unavailable.
+    }
+    onClose();
+  };
+
   const handleNext = () => {
     if (currentIdx < questions.length - 1) {
       setCurrentIdx(currentIdx + 1);
@@ -61,7 +83,12 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
   };
 
   const handleApplyCalibration = async () => {
+    if (usedLocalFallback) {
+      onClose();
+      return;
+    }
     setIsCalibrating(true);
+    setCalibrationStatus(null);
     const answersPayload = questions.map((q, idx) => {
       const isCorrect = selectedOptions[idx] === q.correctIndex;
       return {
@@ -103,23 +130,33 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
           }),
         });
         if (res.ok) {
-          const data = await res.json();
+          const data = await res.json().catch(() => null);
           if (data.success && data.conceptsMap) {
             setServerCalibratedMap(data.conceptsMap);
             onCompleteDiagnostic(data.results || localResults, data.conceptsMap);
-            onClose();
+            setCalibrationStatus({ type: 'success', message: 'Diagnostic results saved and your learning path is ready.' });
             setIsCalibrating(false);
+            window.setTimeout(() => onClose(), 650);
             return;
           }
         }
+        throw new Error('The server did not confirm diagnostic calibration.');
       } catch (err) {
         console.warn('Background diagnostic calibration sync:', err);
+        setCalibrationStatus({
+          type: 'error',
+          message: 'We could not sync your results. Your local calibration is ready; continue to enter your learning path.',
+        });
+        setUsedLocalFallback(true);
       }
     }
 
-    onCompleteDiagnostic(localResults, serverCalibratedMap);
+    onCompleteDiagnostic(localResults, undefined);
     setIsCalibrating(false);
-    onClose();
+    if (!userId) {
+      setCalibrationStatus({ type: 'success', message: 'Diagnostic complete. Your local learning path is ready.' });
+      window.setTimeout(() => onClose(), 650);
+    }
   };
 
   const getDifficultyBadge = (diff: string, blooms: string) => {
@@ -152,8 +189,8 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-stone-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-xl w-full overflow-hidden animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 bg-stone-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+      <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-xl w-full max-h-[92vh] overflow-y-auto animate-in fade-in duration-200">
         {/* Modal Header */}
         <div className="p-5 border-b border-stone-100 flex items-center justify-between bg-stone-50/80">
           <div className="flex items-center gap-2.5">
@@ -180,8 +217,10 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
           {!isMandatory && (
             <button
               id="btn-close-diagnostic-modal"
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/50 transition-colors"
+              type="button"
+              onClick={requestClose}
+              className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/50 transition-colors focus:outline-none focus:ring-2 focus:ring-stone-400"
+              aria-label="Close diagnostic assessment"
             >
               <X className="w-4 h-4" />
             </button>
@@ -200,6 +239,24 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6">
+          {calibrationStatus && (
+            <div
+              role={calibrationStatus.type === 'error' ? 'alert' : 'status'}
+              aria-live={calibrationStatus.type === 'error' ? 'assertive' : 'polite'}
+              className={`mb-4 flex items-start gap-2 rounded-lg border p-3 text-xs ${
+                calibrationStatus.type === 'error'
+                  ? 'border-amber-200 bg-amber-50 text-amber-900'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+              }`}
+            >
+              {calibrationStatus.type === 'error' ? (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+              ) : (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
+              )}
+              <span>{calibrationStatus.message}</span>
+            </div>
+          )}
           {!isCompleted ? (
             <div className="space-y-5">
               <div className="flex items-center justify-between text-xs text-stone-500 font-sans">
@@ -226,10 +283,12 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
                 {currentQ.options.map((opt, idx) => {
                   const isSelected = selectedOptions[currentIdx] === idx;
                   return (
-                    <div
+                    <button
                       key={idx}
+                      type="button"
                       onClick={() => handleSelectOption(idx)}
-                      className={`p-3.5 rounded-xl border text-xs sm:text-sm cursor-pointer transition-all flex items-center gap-3 ${
+                      aria-pressed={isSelected}
+                      className={`w-full text-left p-3.5 rounded-xl border text-xs sm:text-sm cursor-pointer transition-all flex items-center gap-3 focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1 ${
                         isSelected
                           ? 'border-[#114B43] bg-emerald-50/40 text-stone-950 font-medium ring-1 ring-[#114B43]/20'
                           : 'border-stone-200 hover:border-stone-300 bg-white text-stone-800'
@@ -247,7 +306,7 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
                       <span className="leading-snug">
                         <MathView text={opt} />
                       </span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -259,6 +318,7 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
                 </span>
                 <button
                   id="btn-next-diagnostic-q"
+                  type="button"
                   onClick={handleNext}
                   disabled={selectedOptions[currentIdx] === null}
                   className="py-2.5 px-5 bg-[#114B43] hover:bg-[#0D3F38] disabled:bg-stone-200 disabled:text-stone-400 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-2 shadow-2xs cursor-pointer"
@@ -327,12 +387,13 @@ export const DiagnosticModal: React.FC<DiagnosticModalProps> = ({
 
               <button
                 id="btn-apply-diagnostic"
+                type="button"
                 onClick={handleApplyCalibration}
                 disabled={isCalibrating}
-                className="w-full py-3 bg-[#114B43] hover:bg-[#0D3F38] disabled:bg-stone-300 text-white rounded-xl text-xs font-semibold transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+                className="w-full py-3 bg-[#114B43] hover:bg-[#0D3F38] disabled:bg-stone-300 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
               >
-                <Sparkles className="w-4 h-4" />
-                <span>{isCalibrating ? 'Synchronizing with Database...' : 'Apply Calibration & Enter Learning Path'}</span>
+                {isCalibrating ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Sparkles className="w-4 h-4" aria-hidden="true" />}
+                <span>{isCalibrating ? 'Synchronizing with Database...' : usedLocalFallback ? 'Continue with Local Results' : 'Apply Calibration & Enter Learning Path'}</span>
               </button>
             </div>
           )}

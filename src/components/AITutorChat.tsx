@@ -13,6 +13,8 @@ import {
   Plus,
   Check,
   Calculator,
+  Copy,
+  AlertTriangle,
 } from 'lucide-react';
 import { ChatMessage, StudentInterest, ConceptNode } from '../types';
 import { MathView } from './MathView';
@@ -92,6 +94,9 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
   });
 
   // Persist messages whenever they change, bound history size to 50
+  const [chatFeedback, setChatFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+
   useEffect(() => {
     const key = getStorageKey();
     if (key && messages.length > 0) {
@@ -100,6 +105,7 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
         localStorage.setItem(key, JSON.stringify(recentMessages));
       } catch (err) {
         console.warn('Failed to save tutor chat messages to local storage:', err);
+        setChatFeedback({ type: 'error', message: 'Your conversation could not be saved on this device.' });
       }
     }
   }, [messages, studentId]);
@@ -129,6 +135,19 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
         timestamp: 'Just now',
       },
     ]);
+    setChatFeedback({ type: 'success', message: 'New tutor conversation started.' });
+  };
+
+  const requestResetChat = () => {
+    try {
+      if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        const confirmed = window.confirm('Start a new tutor chat? Your saved conversation will be cleared.');
+        if (confirmed === false) return;
+      }
+    } catch {
+      // Keep reset available if native confirmation is unavailable.
+    }
+    handleResetChat();
   };
 
   // Sync language changes
@@ -153,6 +172,7 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
         timestamp: 'Just now',
       },
     ]);
+    setChatFeedback({ type: 'success', message: `Tutor language changed to ${newLang}.` });
   };
 
   useEffect(() => {
@@ -227,25 +247,16 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
             timestamp: 'Just now',
           },
         ]);
+        setChatFeedback({ type: 'success', message: 'Tutor response received.' });
+      } else {
+        throw new Error('The tutor returned an empty response.');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Chat error:', err);
-      const fallbackError =
-        selectedLanguage === 'Hindi'
-          ? `आइए "${concept.title}" के बुनियादी सिद्धांतों को देखते हैं। सबसे पहले मुख्य सूत्र पहचानें और फिर एक-एक करके मान रखें। कौन सा भाग अस्पष्ट लग रहा है?`
-          : selectedLanguage === 'Gujarati'
-          ? `ચાલો "${concept.title}" ના મૂળભૂત નિયમો જોઈએ. સૌથી પહેલા મુખ્ય સૂત્ર ઓળખો અને ત્યારબાદ કિંમતો મૂકો. કયો ભાગ મુશ્કેલ લાગે છે?`
-          : `Let's break down "${concept.title}" into clear foundational steps. First identify the constraints, then apply the formula carefully. Which part feels least clear?`;
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `ai-err-${Date.now()}`,
-          sender: 'ai',
-          text: fallbackError,
-          timestamp: 'Just now',
-        },
-      ]);
+      setChatFeedback({
+        type: 'error',
+        message: err?.message || 'The tutor is unavailable right now. Please try again.',
+      });
     } finally {
       setLoading(false);
     }
@@ -253,7 +264,10 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
 
   // Text-to-speech for tutor responses
   const handleSpeak = (text: string, msgId: string) => {
-    if (!('speechSynthesis' in window)) return;
+    if (!('speechSynthesis' in window)) {
+      setChatFeedback({ type: 'error', message: 'Audio playback is not supported in this browser.' });
+      return;
+    }
 
     if (speakingMsgId === msgId) {
       window.speechSynthesis.cancel();
@@ -280,6 +294,39 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
 
     setSpeakingMsgId(msgId);
     window.speechSynthesis.speak(utterance);
+  };
+
+  const copyTextWithFallback = async (text: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch {
+      // Fall through to the textarea fallback.
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = document.execCommand?.('copy');
+    textarea.remove();
+    if (!copied) throw new Error('Copy is unavailable in this browser.');
+  };
+
+  const handleCopyMessage = async (message: ChatMessage) => {
+    try {
+      await copyTextWithFallback(message.text);
+      setCopiedMessageId(message.id);
+      setChatFeedback({ type: 'success', message: 'Message copied to clipboard.' });
+      window.setTimeout(() => setCopiedMessageId((current) => (current === message.id ? null : current)), 1800);
+    } catch (err: any) {
+      setChatFeedback({ type: 'error', message: err?.message || 'Could not copy this message.' });
+    }
   };
 
   // Insert math symbol or formula snippet into input
@@ -372,10 +419,11 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
             {(['English', 'Hindi', 'Gujarati'] as TutorLanguage[]).map((lang) => {
               const active = selectedLanguage === lang;
               return (
-                <button
-                  key={lang}
-                  id={`btn-lang-${lang.toLowerCase()}`}
-                  onClick={() => handleLanguageChange(lang)}
+                 <button
+                   key={lang}
+                   id={`btn-lang-${lang.toLowerCase()}`}
+                   type="button"
+                   onClick={() => handleLanguageChange(lang)}
                   className={`px-2 py-1 text-xs rounded-md font-medium transition-all flex items-center gap-1 ${
                     active
                       ? 'bg-white dark:bg-[#171716] text-[#114B43] dark:text-emerald-400 font-semibold shadow-2xs'
@@ -391,7 +439,8 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
 
           <button
             id="btn-reset-chat"
-            onClick={handleResetChat}
+            type="button"
+            onClick={requestResetChat}
             className="p-1.5 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-stone-400"
             title="Reset conversation"
             aria-label="Start a new chat"
@@ -400,6 +449,25 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
           </button>
         </div>
       </div>
+
+      {chatFeedback && (
+        <div
+          role={chatFeedback.type === 'error' ? 'alert' : 'status'}
+          aria-live={chatFeedback.type === 'error' ? 'assertive' : 'polite'}
+          className={`flex items-start gap-2 border-b px-4 py-2 text-xs ${
+            chatFeedback.type === 'error'
+              ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-200'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200'
+          }`}
+        >
+          {chatFeedback.type === 'error' ? (
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          )}
+          <span>{chatFeedback.message}</span>
+        </div>
+      )}
 
       {/* Messages Scroll Area */}
       <div className="flex-1 p-4 sm:p-5 overflow-y-auto space-y-4 bg-stone-50/40 dark:bg-[#151514]">
@@ -448,6 +516,7 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
                 >
                   {msg.sender === 'ai' && (
                     <button
+                      type="button"
                       onClick={() => handleSpeak(msg.text, msg.id)}
                       className="flex items-center gap-1 text-[11px] text-stone-500 hover:text-[#114B43] dark:hover:text-emerald-400 transition-colors focus:outline-none focus:ring-2 focus:ring-stone-400 rounded px-1"
                       title={speakingMsgId === msg.id ? 'Stop audio' : 'Listen in audio'}
@@ -466,6 +535,16 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
                       )}
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => handleCopyMessage(msg)}
+                    className="flex items-center gap-1 rounded px-1 text-[11px] text-stone-500 transition-colors hover:text-[#114B43] focus:outline-none focus:ring-2 focus:ring-stone-400 dark:hover:text-emerald-400"
+                    title="Copy message"
+                    aria-label={`Copy ${msg.sender === 'ai' ? 'tutor' : 'your'} message`}
+                  >
+                    {copiedMessageId === msg.id ? <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" /> : <Copy className="h-3 w-3" aria-hidden="true" />}
+                    <span className="text-[10px]">{copiedMessageId === msg.id ? 'Copied' : 'Copy'}</span>
+                  </button>
                   <span className="ml-auto">{msg.timestamp}</span>
                 </div>
               </div>
@@ -497,8 +576,10 @@ export const AITutorChat: React.FC<AITutorChatProps> = ({
           <button
             key={idx}
             id={`quick-prompt-${idx}`}
+            type="button"
             onClick={() => handleSend(prompt)}
-            className="text-xs font-medium px-2.5 py-1 rounded-md bg-white dark:bg-[#252422] border border-stone-200 dark:border-stone-700/80 text-stone-700 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 transition-all shrink-0 shadow-2xs"
+            disabled={loading}
+            className="text-xs font-medium px-2.5 py-1 rounded-md bg-white dark:bg-[#252422] border border-stone-200 dark:border-stone-700/80 text-stone-700 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 transition-all shrink-0 shadow-2xs disabled:cursor-not-allowed disabled:opacity-50"
           >
             {prompt}
           </button>

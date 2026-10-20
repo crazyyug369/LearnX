@@ -5,7 +5,6 @@ import {
   GraduationCap,
   Users,
   ArrowRight,
-  Sparkles,
   ArrowLeft,
   CheckCircle2,
   AlertCircle,
@@ -16,14 +15,12 @@ import { UserProfile } from '../types';
 interface TeacherAccessRestrictedViewProps {
   currentUser: UserProfile | null;
   onOpenTeacherAuth: () => void;
-  onQuickDemoTeacher: (name: string, institution: string, department: string) => void;
   onBackToStudent: () => void;
 }
 
 export const TeacherAccessRestrictedView: React.FC<TeacherAccessRestrictedViewProps> = ({
   currentUser,
   onOpenTeacherAuth,
-  onQuickDemoTeacher,
   onBackToStudent,
 }) => {
   const isStudent = currentUser?.role === 'student';
@@ -105,30 +102,17 @@ export const TeacherAccessRestrictedView: React.FC<TeacherAccessRestrictedViewPr
               </button>
             </div>
 
-            {/* Evaluation / Quick Demo Teacher Action */}
-            <div className="p-6 rounded-xl border border-emerald-200/80 bg-emerald-50/30 flex flex-col justify-between space-y-4">
+            {/* Protected access explanation */}
+            <div className="p-6 rounded-xl border border-stone-200 bg-stone-50/50 flex flex-col justify-between space-y-4">
               <div className="space-y-2">
-                <div className="w-10 h-10 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-xs">
-                  <Sparkles className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-stone-800 text-white flex items-center justify-center shadow-xs">
+                  <Lock className="w-5 h-5" />
                 </div>
-                <h3 className="font-display font-semibold text-stone-900 text-base">
-                  Verified Faculty Access
-                </h3>
+                <h3 className="font-display font-semibold text-stone-900 text-base">Protected faculty data</h3>
                 <p className="text-xs text-stone-600 leading-relaxed">
-                  Need faculty access? Sign in with an educator account or switch to verified faculty profile for <strong className="text-emerald-950">Dr. Priya Rao</strong> (Teacher ID: <span className="font-mono font-semibold">FAC-2026-101</span>).
+                  Student mastery, roster records, and interventions are available only after the server verifies an authorized teacher session.
                 </p>
               </div>
-
-              <button
-                id="btn-restricted-demo-teacher"
-                onClick={() =>
-                  onQuickDemoTeacher('Dr. Priya Rao', 'Kendriya Vidyalaya Academy', 'Mathematics & STEM')
-                }
-                className="w-full py-2.5 px-4 bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl text-xs font-semibold transition-all shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>Switch to Faculty: Dr. Priya Rao</span>
-              </button>
             </div>
           </div>
 

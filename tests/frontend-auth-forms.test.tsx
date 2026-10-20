@@ -250,6 +250,25 @@ describe('Stage 2 Frontend Auth Forms Integration', () => {
 
     unmount();
   });
+
+  test('5. Password visibility controls are labeled and available for each portal', () => {
+    const { getByRole, unmount } = render(
+      <AuthModal isOpen={true} onClose={mockOnClose} onLogin={mockOnLogin} initialRole="student" />
+    );
+
+    assert.ok(getByRole('button', { name: 'Show student password' }));
+
+    fireEvent.click(getByRole('button', { name: 'Educator' }));
+    assert.ok(getByRole('button', { name: 'Show educator password' }));
+
+    fireEvent.click(getByRole('button', { name: 'Institution' }));
+    assert.ok(getByRole('button', { name: 'Show institution passkey' }));
+
+    fireEvent.click(getByRole('button', { name: 'Admin' }));
+    assert.ok(getByRole('button', { name: 'Show administrator passkey' }));
+
+    unmount();
+  });
 });
 
 

@@ -207,7 +207,8 @@ export interface ClassroomAnalytics {
 
 export interface SystemSettings {
   geminiEnabled: boolean;
-  geminiApiKey: string;
+  hasApiKey: boolean;
+  maskedApiKey?: string | null;
   geminiModel: string;
   geminiModelPriority: string[];
   geminiTemperature: number;

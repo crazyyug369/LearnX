@@ -2,11 +2,14 @@
 import path from 'path';
 import fs from 'fs';
 import readline from 'readline';
+import type { Request, RequestHandler } from 'express';
 import { GoogleGenAI } from '@google/genai';
 import 'dotenv/config';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import { authRouter, verifyToken, requireRole } from './src/auth.js';
+import { createPublicPageHandler } from './src/public-site/server.js';
+import { DatabaseUnavailableError, ResourceAccessError, isDatabaseUnavailable } from './src/security/errors.js';
 import { validate } from './src/middleware/validate.js';
 import {
   adaptiveLessonOutputSchema,
@@ -32,7 +35,19 @@ import {
   adminInstitutionPostSchema,
   adminQuestionsQuerySchema,
   adminAuditLogsQuerySchema,
-  modelsBktTraceSchema
+  modelsBktTraceSchema,
+  quizSubmitAttemptSchema,
+  studentProgressUpdateSchema,
+  userProfileUpdateSchema,
+  teacherInterventionSchema,
+  studentCreateSchema,
+  studentUpdateSchema,
+  adminSettingsSchema,
+  adminTestGeminiSchema,
+  adminUserCreateSchema,
+  adminUserUpdateSchema,
+  adminQuestionSchema,
+  adminInstitutionUpdateSchema,
 } from './src/middleware/schemas.js';
 import {
   initDatabase,
@@ -89,17 +104,295 @@ if (typeof __filename !== 'undefined' && (__filename.endsWith('.cjs') || __filen
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
-app.use(cookieParser());
-const corsOptions: any = {};
-if (process.env.FRONTEND_ORIGIN) {
-  corsOptions.origin = process.env.FRONTEND_ORIGIN;
+function internalServerError(res: any, context: string, error: unknown): any {
+  console.error(context, error);
+  return res.status(500).json({ success: false, error: 'Internal server error' });
 }
-app.use(cors(corsOptions));
+
+function validateProductionConfiguration(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  const jwtSecret = process.env.JWT_SECRET || '';
+  if (jwtSecret.length < 32 || /your_jwt_secret_here/i.test(jwtSecret)) {
+    throw new Error('JWT_SECRET must be configured with at least 32 random characters in production');
+  }
+  const requiredDatabaseEnv = ['MYSQL_HOST', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'];
+  const missingDatabaseEnv = requiredDatabaseEnv.find((key) => {
+    const value = process.env[key]?.trim() || '';
+    return value.length === 0 || /^(replace_|your_)/i.test(value);
+  });
+  if (missingDatabaseEnv) {
+    throw new Error(`${missingDatabaseEnv} must be configured in production`);
+  }
+  const forbiddenProductionFlags = ['ENABLE_LEGACY_AUTH', 'MOCK_GEMINI', 'ALLOW_DEMO_SEEDS', 'VITE_DEV'];
+  const enabledForbiddenFlag = forbiddenProductionFlags.find((key) => process.env[key] === 'true');
+  if (enabledForbiddenFlag) {
+    throw new Error(`${enabledForbiddenFlag} must be disabled in production`);
+  }
+}
+
+const JSON_BODY_LIMIT = '100kb';
+const URLENCODED_BODY_LIMIT = '50kb';
+
+const STATIC_PUBLIC_FILES = new Set([
+  '/index.html',
+  '/robots.txt',
+  '/sitemap.xml',
+  '/googlea74f1a956d6316e0.html',
+  '/favicon.svg',
+  '/early-seo.js',
+  '/early-theme.js',
+]);
+
+function isWithinDirectory(rootPath: string, candidatePath: string): boolean {
+  const root = path.resolve(rootPath);
+  const candidate = path.resolve(candidatePath);
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+function isForbiddenStaticPath(requestPath: string): boolean {
+  const lowerPath = requestPath.toLowerCase();
+  const basename = path.posix.basename(lowerPath);
+  return basename === 'server.cjs' || basename === 'server.cjs.map' || lowerPath.endsWith('.map');
+}
+
+/**
+ * Resolve only explicitly public frontend assets. The lexical and realpath
+ * containment checks protect against traversal and symlink escapes.
+ */
+export function resolveStaticAssetPath(distRoot: string, requestPath: string): string | null {
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(requestPath.split('?')[0] || '/');
+  } catch {
+    return null;
+  }
+
+  if (!decodedPath.startsWith('/') || decodedPath.includes('\0') || decodedPath.includes(':')) return null;
+
+  // Reject traversal attempts before normalization so /assets/../secret is
+  // denied rather than silently remapped to another allowlisted path.
+  const rawSegments = decodedPath.split(/[\\/]+/);
+  if (rawSegments.some((segment) => segment === '..')) return null;
+
+  const normalizedPath = path.posix.normalize(decodedPath.replace(/\\/g, '/'));
+  if (normalizedPath === '.' || !normalizedPath.startsWith('/')) return null;
+  if (isForbiddenStaticPath(normalizedPath)) return null;
+
+  const isAllowedRootFile = STATIC_PUBLIC_FILES.has(normalizedPath);
+  const isAllowedAsset = normalizedPath.startsWith('/assets/') && normalizedPath.length > '/assets/'.length;
+  if (!isAllowedRootFile && !isAllowedAsset) return null;
+
+  const resolvedRoot = path.resolve(distRoot);
+  const candidatePath = path.resolve(resolvedRoot, `.${normalizedPath}`);
+  if (!isWithinDirectory(resolvedRoot, candidatePath)) return null;
+
+  // A symlink inside dist must not point outside the frontend perimeter.
+  try {
+    const realRoot = fs.realpathSync.native(resolvedRoot);
+    const realCandidate = fs.realpathSync.native(candidatePath);
+    if (!isWithinDirectory(realRoot, realCandidate)) return null;
+    if (!fs.statSync(realCandidate).isFile()) return null;
+    return realCandidate;
+  } catch {
+    return null;
+  }
+}
+
+export function createStaticAssetHandler(distRoot: string): RequestHandler {
+  const template = fs.readFileSync(path.join(distRoot, 'index.html'), 'utf8');
+  const publicPage = createPublicPageHandler(template, {
+    PUBLIC_AUTHOR_NAME: process.env.PUBLIC_AUTHOR_NAME,
+    PUBLIC_AUTHOR_BIO: process.env.PUBLIC_AUTHOR_BIO,
+  });
+
+  return (req, res, next) => {
+    const requestPath = req.originalUrl.split('?')[0] || '/';
+    if (/^\/api(?:\/|$)/.test(requestPath)) return next();
+
+    if (requestPath === '/' || requestPath === '/index.html') {
+      return publicPage(req, res, next);
+    }
+
+    const assetPath = resolveStaticAssetPath(distRoot, requestPath);
+    if (assetPath) return res.sendFile(assetPath);
+
+    const extension = path.posix.extname(requestPath).toLowerCase();
+    if (requestPath.startsWith('/assets/') || (extension && extension !== '.html')) {
+      return res.status(404).send('Not Found');
+    }
+
+    return publicPage(req, res, next);
+  };
+}
+
+function handleSecurityOrDatabaseError(res: any, error: unknown, fallback = 'Internal server error'): any {
+  if (error instanceof ResourceAccessError) {
+    return res.status(403).json({ success: false, error: error.message });
+  }
+  if (error instanceof DatabaseUnavailableError || isDatabaseUnavailable(error)) {
+    return res.status(503).json({ success: false, error: 'Database temporarily unavailable' });
+  }
+  return res.status(500).json({ success: false, error: fallback });
+}
+
+function parseOrigin(value: string | undefined): string | null {
+  if (!value || value.trim() !== value) return null;
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+const configuredFrontendOrigin = parseOrigin(process.env.FRONTEND_ORIGIN);
+
+function getSameOrigin(req: Request): string | null {
+  const host = req.get('host');
+  if (!host) return null;
+  return parseOrigin(`${req.protocol}://${host}`);
+}
+
+function isAllowedRequestOrigin(req: Request, requestOrigin: string): boolean {
+  const parsedOrigin = parseOrigin(requestOrigin);
+  if (!parsedOrigin) return false;
+  return parsedOrigin === configuredFrontendOrigin || parsedOrigin === getSameOrigin(req);
+}
+
+export interface RateLimiterOptions {
+  windowMs: number;
+  max: number;
+  keyGenerator?: (req: Request) => string;
+}
+
+export function createRateLimiter(options: RateLimiterOptions): RequestHandler & { reset: () => void } {
+  const windowMs = Math.max(1, Math.floor(options.windowMs));
+  const max = Math.max(1, Math.floor(options.max));
+  const keyGenerator = options.keyGenerator || ((req: Request) => req.ip || req.socket.remoteAddress || 'unknown');
+  const hits = new Map<string, { count: number; resetAt: number }>();
+
+  const limiter: RequestHandler & { reset: () => void } = (req, res, next) => {
+    const now = Date.now();
+    if (hits.size > 1000) {
+      for (const [storedKey, storedEntry] of hits) {
+        if (storedEntry.resetAt <= now) hits.delete(storedKey);
+      }
+    }
+    const key = keyGenerator(req);
+    const current = hits.get(key);
+    const entry = !current || current.resetAt <= now
+      ? { count: 1, resetAt: now + windowMs }
+      : { count: current.count + 1, resetAt: current.resetAt };
+
+    hits.set(key, entry);
+    if (entry.count > max) {
+      const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ success: false, error: 'Too many requests. Please try again later.' });
+    }
+
+    return next();
+  };
+
+  limiter.reset = () => hits.clear();
+  return limiter;
+}
+
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : false);
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  if (req.path.startsWith('/api')) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+  }
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; " +
+      "script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https://images.unsplash.com https://*.unsplash.com; " +
+      "connect-src 'self'; frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com",
+  );
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+// Reject malformed and non-allowlisted browser origins before the CORS
+// middleware. Requests without Origin are non-browser/same-origin traffic.
+app.use((req, res, next) => {
+  const requestOrigin = req.get('Origin');
+  if (requestOrigin && !isAllowedRequestOrigin(req, requestOrigin)) {
+    return res.status(403).json({ success: false, error: 'Origin not allowed' });
+  }
+  return next();
+});
+
+app.use(cors({
+  credentials: true,
+  origin: (requestOrigin, callback) => callback(null, requestOrigin || false),
+}));
+
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: false, limit: URLENCODED_BODY_LIMIT, parameterLimit: 100 }));
+app.use(cookieParser());
+
+// Keep authentication and expensive mutation/AI traffic on separate budgets.
+const authRateLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+const expensiveRateLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
+const expensiveRouteMatchers: Array<(req: Request) => boolean> = [
+  (req) => req.path.startsWith('/api/ai/'),
+  (req) => req.method === 'POST' && req.path === '/api/diagnostic/calibrate',
+  (req) => (req.method === 'POST' || req.method === 'DELETE') && (req.path === '/api/curriculum' || req.path.startsWith('/api/curriculum/')),
+  (req) => req.method === 'POST' && req.path === '/api/quiz/submit-attempt',
+  (req) => req.method === 'POST' && req.path === '/api/teacher/worksheet/generate',
+  (req) => req.method === 'POST' && req.path === '/api/teacher/interventions/deploy',
+  (req) => ['POST', 'PATCH', 'DELETE'].includes(req.method) && /^\/api\/students(?:\/|$)/.test(req.path),
+  (req) => ['PUT', 'PATCH'].includes(req.method) && /^\/api\/users\/[^/]+\/(?:progress|profile)$/.test(req.path),
+  (req) => req.method === 'POST' && req.path === '/api/models/bkt/trace',
+  (req) => req.method === 'GET' && req.path === '/api/models/dataset/search',
+  (req) => req.method === 'GET' && (
+    req.path === '/api/curriculum' ||
+    req.path === '/api/diagnostic/questions' ||
+    req.path === '/api/models/registry' ||
+    req.path === '/api/models/bkt' ||
+    req.path.startsWith('/api/models/dag/') ||
+    req.path.startsWith('/api/models/recommendations/')
+  ),
+];
+
+app.use('/api/auth', authRateLimiter);
+app.use((req, res, next) => {
+  const requestPath = req.path;
+  if (requestPath === '/api/health' || !expensiveRouteMatchers.some((matcher) => matcher(req))) {
+    return next();
+  }
+  return expensiveRateLimiter(req, res, next);
+});
+
+// Body-parser errors are returned without parser internals or stack details.
+app.use((err: any, _req: Request, res: any, next: any) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ success: false, error: 'Request body too large' });
+  }
+  if (err?.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err)) {
+    return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+  }
+  return next(err);
+});
 
 app.use((req, res, next) => {
-  if (req.url.startsWith('/api')) {
-    console.log(`[API ${req.method}] ${req.url}`);
+  if (req.path.startsWith('/api')) {
+    console.log(`[API ${req.method}] ${req.path}`);
   }
   next();
 });
@@ -127,8 +420,27 @@ async function getLiveSettings() {
   return cachedSettings;
 }
 
+function maskSecret(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  if (value.length <= 8) return '********';
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+export function toPublicSettings(settings: Record<string, any>) {
+  return {
+    geminiEnabled: Boolean(settings.geminiEnabled),
+    hasApiKey: Boolean(settings.geminiApiKey),
+    maskedApiKey: maskSecret(settings.geminiApiKey),
+    geminiModel: settings.geminiModel,
+    geminiModelPriority: settings.geminiModelPriority,
+    geminiTemperature: settings.geminiTemperature,
+    maintenanceMode: Boolean(settings.maintenanceMode),
+    announcementBanner: settings.announcementBanner || '',
+  };
+}
+
 function resetAIClient(newApiKey?: string) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = newApiKey || process.env.GEMINI_API_KEY;
   if (apiKey) {
     aiClient = new GoogleGenAI({
       apiKey,
@@ -145,7 +457,7 @@ function resetAIClient(newApiKey?: string) {
 }
 
 function getAIClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || cachedSettings?.geminiApiKey;
   if (!aiClient && apiKey) {
     resetAIClient(apiKey);
   }
@@ -1682,7 +1994,7 @@ Respond STRICTLY with valid JSON matching this schema:
 });
 
 // 2. Submit Quiz Attempt and Update Real BKT Mastery in MySQL
-app.post('/api/quiz/submit-attempt', verifyToken, requireRole(['student']), async (req: any, res: any) => {
+app.post('/api/quiz/submit-attempt', verifyToken, requireRole(['student']), validate(quizSubmitAttemptSchema), async (req: any, res: any) => {
   try {
     const {
       conceptId,
@@ -1738,7 +2050,8 @@ app.get('/api/student/quiz-attempts/:userId', verifyToken, requireRole(['student
     if (req.user.role === 'student' && req.user.id !== userId) {
       return res.status(403).json({ success: false, error: 'Cannot access other student data' });
     }
-    if ((req.user.role === 'teacher' || req.user.role === 'institution') && req.user.institutionId) {
+    if (req.user.role === 'teacher' || req.user.role === 'institution') {
+       if (!requireInstitutionContext(req, res)) return;
        const isMapped = await isUserInInstitution(userId, req.user.institutionId);
        if (!isMapped) return res.status(403).json({ success: false, error: 'Student not in your institution' });
     }
@@ -1770,11 +2083,12 @@ app.get('/api/diagnostic/questions', async (req, res) => {
   }
 });
 
-app.post('/api/diagnostic/calibrate', validate(diagnosticCalibrateSchema), async (req, res) => {
+app.post('/api/diagnostic/calibrate', verifyToken, validate(diagnosticCalibrateSchema), async (req: any, res) => {
   try {
-    const { userId, grade = 'Class 10', subject, answers } = req.body;
+    const { grade = 'Class 10', subject, answers } = req.body;
+    const userId = req.user.id;
     if (!userId || !Array.isArray(answers)) {
-      return res.status(400).json({ success: false, error: 'userId and answers array are required' });
+      return res.status(400).json({ success: false, error: 'Answers array is required' });
     }
 
     const calibrationResult = await calibrateStudentDiagnosticInDb({
@@ -1787,7 +2101,7 @@ app.post('/api/diagnostic/calibrate', validate(diagnosticCalibrateSchema), async
     return res.json(calibrationResult);
   } catch (err: any) {
     console.error('Diagnostic calibration error:', err);
-    return res.status(500).json({ success: false, error: err?.message || 'Failed to calibrate diagnostic baseline' });
+    return res.status(500).json({ success: false, error: 'Failed to calibrate diagnostic baseline' });
   }
 });
 
@@ -1795,7 +2109,7 @@ app.post('/api/diagnostic/calibrate', validate(diagnosticCalibrateSchema), async
 app.get('/api/curriculum', async (req, res) => {
   try {
     const { subject, grade } = req.query as { subject?: string; grade?: string };
-    let nodes = await getCurriculumNodesFromDb(subject, grade);
+    let nodes = await getCurriculumNodesFromDb(subject, grade, (req as any).user);
     if (!nodes || nodes.length === 0) {
       // Fallback to rich NCERT grade syllabus
       const gradeMap = getCurriculumForGrade(grade, subject);
@@ -1821,7 +2135,7 @@ app.get('/api/curriculum', async (req, res) => {
   }
 });
 
-app.post('/api/curriculum', validate(curriculumPostSchema), async (req, res) => {
+app.post('/api/curriculum', verifyToken, requireRole(['teacher', 'admin']), validate(curriculumPostSchema), async (req, res) => {
   try {
     const {
       id,
@@ -1855,32 +2169,33 @@ app.post('/api/curriculum', validate(curriculumPostSchema), async (req, res) => 
       estimatedTime,
       createdBy,
       isCustom: true,
-    });
+    }, (req as any).user);
 
     return res.json({ success: saved, nodeId });
   } catch (err: any) {
     console.error('Save curriculum node error:', err);
-    return res.status(500).json({ success: false, error: err?.message || 'Failed to save node' });
+    return res.status(500).json({ success: false, error: 'Failed to save node' });
   }
 });
 
-app.delete('/api/curriculum/:id', validate(idParamsSchema), async (req, res) => {
+app.delete('/api/curriculum/:id', verifyToken, requireRole(['teacher', 'admin']), validate(idParamsSchema), async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await deleteCurriculumNodeFromDb(id);
+    const deleted = await deleteCurriculumNodeFromDb(id, (req as any).user);
     return res.json({ success: deleted });
   } catch (err: any) {
     console.error('Delete curriculum node error:', err);
-    return res.status(500).json({ success: false, error: err?.message || 'Failed to delete node' });
+    return res.status(500).json({ success: false, error: 'Failed to delete node' });
   }
 });
 
 // 5. AI Prerequisite & Curriculum Sequence Auto-Suggestion (NCERT DAG + Gemini)
-app.post('/api/curriculum/ai-suggest', validate(curriculumAiSuggestSchema), async (req, res) => {
-  const { title, subject = 'Mathematics', grade = 'Grade 10' } = req.body;
-  if (!title) {
-    return res.status(400).json({ success: false, error: 'Chapter or Concept title is required' });
-  }
+app.post('/api/curriculum/ai-suggest', verifyToken, requireRole(['teacher', 'admin']), validate(curriculumAiSuggestSchema), async (req, res) => {
+  try {
+    const { title, subject = 'Mathematics', grade = 'Grade 10' } = req.body;
+    if (!title) {
+      return res.status(400).json({ success: false, error: 'Chapter or Concept title is required' });
+    }
 
   // 1. Check local NCERT Curriculum DAG (29,000 nodes)
   const dag = getNCERTDagData();
@@ -1958,20 +2273,24 @@ ${matchedRecs.length > 0 ? `Recommended Next Concepts=[${matchedRecs.join(', ')}
   }
 
   // Fallback to NCERT DAG if Gemini is offline
-  return res.json({
-    success: true,
-    data: {
-      category: matchedDagNode?.subject || 'General Unit',
-      difficulty: (matchedDagNode?.difficulty as any) || 'Intermediate',
-      prerequisites: matchedDagNode?.prerequisites || [],
-      nextConcepts: matchedRecs || [],
-      tags: [subject, grade, title],
-      estimatedTimeMin: 25,
-      description: `Comprehensive study of ${title} according to NCERT standard syllabus.`,
-      pedagogicalRationale: 'Prerequisite dependencies mapped from 29,000 NCERT pedagogical nodes.',
-      source: 'ncert_curriculum_dag',
-    },
-  });
+    return res.json({
+      success: true,
+      data: {
+        category: matchedDagNode?.subject || 'General Unit',
+        difficulty: (matchedDagNode?.difficulty as any) || 'Intermediate',
+        prerequisites: matchedDagNode?.prerequisites || [],
+        nextConcepts: matchedRecs || [],
+        tags: [subject, grade, title],
+        estimatedTimeMin: 25,
+        description: `Comprehensive study of ${title} according to NCERT standard syllabus.`,
+        pedagogicalRationale: 'Prerequisite dependencies mapped from 29,000 NCERT pedagogical nodes.',
+        source: 'ncert_curriculum_dag',
+      },
+    });
+  } catch (err) {
+    console.error('Curriculum suggestion error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to generate curriculum suggestion' });
+  }
 });
 
 
@@ -2072,6 +2391,17 @@ let cohortStudents: ServerStudent[] = [
 
 app.use('/api/auth', authRouter);
 
+function requireInstitutionContext(req: any, res: any): boolean {
+  if (
+    ['teacher', 'institution'].includes(req.user?.role) &&
+    (typeof req.user.institutionId !== 'string' || req.user.institutionId.length === 0)
+  ) {
+    res.status(403).json({ success: false, error: 'Institution scope is required' });
+    return false;
+  }
+  return true;
+}
+
 // GET verify institution code for instant feedback during student registration
 app.get('/api/institutions/verify-code/:code', async (req, res) => {
   try {
@@ -2105,7 +2435,8 @@ app.get('/api/users/:userId/progress', verifyToken, requireRole(['student', 'tea
     if (req.user.role === 'student' && req.user.id !== userId) {
       return res.status(403).json({ success: false, error: 'Cannot access other student data' });
     }
-    if ((req.user.role === 'teacher' || req.user.role === 'institution') && req.user.institutionId) {
+    if (req.user.role === 'teacher' || req.user.role === 'institution') {
+       if (!requireInstitutionContext(req, res)) return;
        const isMapped = await isUserInInstitution(userId, req.user.institutionId);
        if (!isMapped) return res.status(403).json({ success: false, error: 'Student not in your institution' });
     }
@@ -2122,7 +2453,7 @@ app.get('/api/users/:userId/progress', verifyToken, requireRole(['student', 'tea
 });
 
 // PUT update user progress & concepts to MySQL
-app.put('/api/users/:userId/progress', verifyToken, requireRole(['student', 'admin']), async (req: any, res: any) => {
+app.put('/api/users/:userId/progress', verifyToken, requireRole(['student', 'admin']), validate(studentProgressUpdateSchema), async (req: any, res: any) => {
   try {
     let { userId } = req.params;
 
@@ -2147,7 +2478,7 @@ app.put('/api/users/:userId/progress', verifyToken, requireRole(['student', 'adm
 });
 
 // PATCH update user profile (interest theme, grade, name, streak) in MySQL
-app.patch('/api/users/:userId/profile', verifyToken, requireRole(['student', 'admin']), async (req: any, res: any) => {
+app.patch('/api/users/:userId/profile', verifyToken, requireRole(['student', 'admin']), validate(userProfileUpdateSchema), async (req: any, res: any) => {
   try {
     let { userId } = req.params;
 
@@ -2173,6 +2504,7 @@ app.patch('/api/users/:userId/profile', verifyToken, requireRole(['student', 'ad
 
 // GET cohort students (prioritizes MySQL, falls back to memory) with dynamic filtering
 app.get('/api/students', verifyToken, requireRole(['teacher', 'institution', 'admin']), async (req: any, res: any) => {
+  if (!requireInstitutionContext(req, res)) return;
   const { grade, status, search, interest, sortBy } = req.query;
   const filterParams = {
     grade: grade as string,
@@ -2554,21 +2886,23 @@ Respond ONLY with valid JSON in this exact structure:
 // GET curriculum bottlenecks & velocity telemetry from MySQL
 app.get('/api/teacher/analytics/bottlenecks', verifyToken, requireRole(['teacher', 'institution', 'admin']), async (req: any, res: any) => {
   try {
+    if (!requireInstitutionContext(req, res)) return;
     const institutionId = ['teacher', 'institution'].includes(req.user.role) ? req.user.institutionId : undefined;
     const data = await getCurriculumBottlenecksFromDb(institutionId);
     return res.json({ success: true, ...data });
   } catch (err: any) {
     console.error('Error fetching curriculum bottlenecks:', err);
-    return res.status(500).json({ success: false, error: err?.message || 'Failed to fetch bottlenecks' });
+    return handleSecurityOrDatabaseError(res, err, 'Failed to fetch bottlenecks');
   }
 });
 
 // POST deploy teacher-initiated remediation intervention
-app.post('/api/teacher/interventions/deploy', verifyToken, requireRole(['teacher', 'admin']), async (req: any, res: any) => {
+app.post('/api/teacher/interventions/deploy', verifyToken, requireRole(['teacher', 'admin']), validate(teacherInterventionSchema), async (req: any, res: any) => {
   try {
     let { conceptTitle, subject, teacherId } = req.body;
 
     if (req.user.role === 'teacher') {
+       if (!requireInstitutionContext(req, res)) return;
        teacherId = req.user.id; // Enforce override
     }
 
@@ -2579,16 +2913,16 @@ app.post('/api/teacher/interventions/deploy', verifyToken, requireRole(['teacher
       conceptTitle,
       subject,
       teacherId,
-    });
+    }, req.user);
     return res.json(result);
   } catch (err: any) {
     console.error('Error deploying teacher intervention:', err);
-    return res.status(500).json({ success: false, error: err?.message || 'Failed to deploy intervention' });
+    return handleSecurityOrDatabaseError(res, err, 'Failed to deploy intervention');
   }
 });
 
 // POST register or enroll new student with complete MySQL persistence
-app.post('/api/students', verifyToken, requireRole(['teacher', 'institution', 'admin']), async (req: any, res: any) => {
+app.post('/api/students', verifyToken, requireRole(['teacher', 'institution', 'admin']), validate(studentCreateSchema), async (req: any, res: any) => {
   let {
     id,
     name,
@@ -2606,6 +2940,7 @@ app.post('/api/students', verifyToken, requireRole(['teacher', 'institution', 'a
   } = req.body;
 
   if (['teacher', 'institution'].includes(req.user.role)) {
+     if (!requireInstitutionContext(req, res)) return;
      institutionId = req.user.institutionId; // Enforce override
   }
 
@@ -2628,7 +2963,11 @@ app.post('/api/students', verifyToken, requireRole(['teacher', 'institution', 'a
       institution,
       institutionId,
       institutionCode,
-    });
+    }, req.user);
+
+    if (!enrollResult.success || !enrollResult.student) {
+      return res.status(400).json({ success: false, error: enrollResult.error || 'Unable to enroll student' });
+    }
 
     const persistedStudent: ServerStudent = {
       id: enrollResult.student.id,
@@ -2660,32 +2999,12 @@ app.post('/api/students', verifyToken, requireRole(['teacher', 'institution', 'a
     return res.json({ success: true, student: persistedStudent, count: cohortStudents.length });
   } catch (dbErr: any) {
     console.error('Error enrolling student in DB:', dbErr);
-    // Fallback to in-memory registration
-    const fallbackStudent: ServerStudent = {
-      id: id || `student-${Date.now()}`,
-      name,
-      email: email || `${name.toLowerCase().replace(/[^a-z0-9]/g, '.')}@student.learnx.org`,
-      grade,
-      studentId: studentId || `STU-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-      avatar: avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-      overallMastery: Number(overallMastery) || 50,
-      strugglingConcept: strugglingConcept || null,
-      status: (status as any) || 'New Enrollee',
-      lastActive: 'Just registered',
-      interest,
-      registeredAt: Date.now(),
-      isNewRegistration: true,
-      institution: institution || 'Delhi Public School',
-      institutionId: institutionId || 'inst-dps-2026',
-      institutionCode: institutionCode || 'DPS2026',
-    };
-    cohortStudents.unshift(fallbackStudent);
-    return res.json({ success: true, student: fallbackStudent, count: cohortStudents.length });
+    return handleSecurityOrDatabaseError(res, dbErr, 'Unable to enroll student');
   }
 });
 
 // PATCH update student progress
-app.patch('/api/students/:id', verifyToken, requireRole(['teacher', 'institution', 'admin']), async (req: any, res: any) => {
+app.patch('/api/students/:id', verifyToken, requireRole(['teacher', 'institution', 'admin']), validate(studentUpdateSchema), async (req: any, res: any) => {
   const { id } = req.params;
 
   if (['teacher', 'institution'].includes(req.user.role)) {
@@ -2726,9 +3045,11 @@ app.delete('/api/students/:id', verifyToken, requireRole(['admin', 'institution'
 
   try {
     // 1. Delete from MySQL across cohort_students, student_progress, and users
-    await deleteCohortStudentFromDb(id);
+    const deleted = await deleteCohortStudentFromDb(id, req.user);
+    if (!deleted) return res.status(404).json({ success: false, error: 'Student not found' });
   } catch (err) {
     console.error('Error deleting student from DB:', err);
+    return handleSecurityOrDatabaseError(res, err, 'Unable to delete student');
   }
 
   // 2. Remove from in-memory array
@@ -2758,7 +3079,7 @@ app.get('/api/admin/stats', async (req, res) => {
       },
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin stats error:', err);
   }
 });
 
@@ -2778,43 +3099,49 @@ app.get('/api/admin/users', validate(adminUsersQuerySchema), async (req, res) =>
     });
     return res.json({ success: true, ...result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin users list error:', err);
   }
 });
 
 // 3. CRM Create User (POST)
-app.post('/api/admin/users', async (req, res) => {
+app.post('/api/admin/users', validate(adminUserCreateSchema), async (req, res) => {
   try {
-    const result = await adminCreateUser(req.body);
+    const result = await adminCreateUser({
+      ...req.body,
+      actorName: (req as any).user?.name || 'Admin',
+    });
     if (result.success) {
       return res.status(201).json(result);
     }
     return res.status(400).json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin user creation error:', err);
   }
 });
 
 // 4. CRM Update User (PUT)
-app.put('/api/admin/users/:id', validate(idParamsSchema), async (req, res) => {
+app.put('/api/admin/users/:id', validate(idParamsSchema), validate(adminUserUpdateSchema), async (req, res) => {
   try {
-    const result = await adminUpdateUser(req.params.id, req.body);
+    const result = await adminUpdateUser(req.params.id, {
+      ...req.body,
+      actorName: (req as any).user?.name || 'Admin',
+    });
     if (result.success) {
       return res.json({ success: true });
     }
     return res.status(400).json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin user update error:', err);
   }
 });
 
 // 5. CRM Delete User (DELETE)
 app.delete('/api/admin/users/:id', validate(idParamsSchema), async (req, res) => {
   try {
-    const result = await adminDeleteUser(req.params.id, req.body?.actorName || 'Admin');
+    const result = await adminDeleteUser(req.params.id, (req as any).user?.name || 'Admin');
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin user deletion error:', err);
   }
 });
 
@@ -2832,7 +3159,7 @@ app.get('/api/admin/institutions', validate(adminInstitutionsQuerySchema), async
     });
     return res.json({ success: true, ...result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution list error:', err);
   }
 });
 
@@ -2843,13 +3170,13 @@ app.post('/api/admin/institutions', validate(adminInstitutionPostSchema), async 
     if (!code || !name || !email) {
       return res.status(400).json({ success: false, error: 'Institution code, name, and email are required' });
     }
-    const result = await createInstitution(req.body, req.body?.actorName || 'Admin');
+    const result = await createInstitution(req.body, (req as any).user?.name || 'Admin');
     if (result.success) {
       return res.status(201).json(result);
     }
     return res.status(400).json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution creation error:', err);
   }
 });
 
@@ -2862,30 +3189,30 @@ app.get('/api/admin/institutions/:id', validate(idParamsSchema), async (req, res
     }
     return res.json({ success: true, institution: inst });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution lookup error:', err);
   }
 });
 
 // PUT update institution
-app.put('/api/admin/institutions/:id', validate(idParamsSchema), async (req, res) => {
+app.put('/api/admin/institutions/:id', validate(idParamsSchema), validate(adminInstitutionUpdateSchema), async (req, res) => {
   try {
-    const result = await updateInstitution(req.params.id, req.body, req.body?.actorName || 'Admin');
+    const result = await updateInstitution(req.params.id, req.body, (req as any).user?.name || 'Admin');
     if (result.success) {
       return res.json(result);
     }
     return res.status(400).json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution update error:', err);
   }
 });
 
 // DELETE institution
 app.delete('/api/admin/institutions/:id', validate(idParamsSchema), async (req, res) => {
   try {
-    const result = await deleteInstitution(req.params.id, req.body?.actorName || 'Admin');
+    const result = await deleteInstitution(req.params.id, (req as any).user?.name || 'Admin');
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution deletion error:', err);
   }
 });
 
@@ -2895,7 +3222,7 @@ app.get('/api/admin/institutions/:id/members', validate(idParamsSchema), async (
     const result = await getInstitutionMembers(req.params.id);
     return res.json({ success: true, ...result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution members error:', err);
   }
 });
 
@@ -2908,35 +3235,35 @@ app.post('/api/admin/institutions/:id/members', validate(idParamsSchema), async 
     }
     return res.status(400).json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution member creation error:', err);
   }
 });
 
 // DELETE remove member from institution
 app.delete('/api/admin/institutions/:id/members/:userId', validate(idAndUserParamsSchema), async (req, res) => {
   try {
-    const result = await removeInstitutionMember(req.params.id, req.params.userId, req.body?.actorName || 'Admin');
+    const result = await removeInstitutionMember(req.params.id, req.params.userId, (req as any).user?.name || 'Admin');
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin institution member deletion error:', err);
   }
 });
 
 // 6. System & AI Settings (GET)
-app.get('/api/admin/settings', async (req, res) => {
+app.get('/api/admin/settings', async (req: any, res) => {
   try {
     const settings = await getLiveSettings();
-    return res.json({ success: true, settings });
+    return res.json({ success: true, settings: toPublicSettings(settings) });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Failed to load system settings' });
   }
 });
 
 // 7. System & AI Settings (POST Update)
-app.post('/api/admin/settings', async (req, res) => {
+app.post('/api/admin/settings', validate(adminSettingsSchema), async (req: any, res) => {
   try {
     const updates = req.body || {};
-    const actorName = updates.actorName || 'Administrator';
+    const actorName = req.user?.name || 'Administrator';
 
     if (updates.geminiEnabled !== undefined) {
       await saveSystemSettingToDb('gemini_enabled', updates.geminiEnabled ? 'true' : 'false', actorName);
@@ -2968,15 +3295,16 @@ app.post('/api/admin/settings', async (req, res) => {
     return res.json({
       success: true,
       message: 'System settings updated successfully',
-      settings: cachedSettings,
+      settings: toPublicSettings(cachedSettings),
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.error('Admin settings update failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to update system settings' });
   }
 });
 
 // 8. Test Gemini AI Engine (POST)
-app.post('/api/admin/test-gemini', async (req, res) => {
+app.post('/api/admin/test-gemini', validate(adminTestGeminiSchema), async (req, res) => {
   const startTime = Date.now();
   try {
     const settings = await getLiveSettings();
@@ -2997,7 +3325,16 @@ app.post('/api/admin/test-gemini', async (req, res) => {
       });
     }
 
-    const testModel = req.body?.model || settings.geminiModel || 'gemini-2.5-flash';
+    const requestedModel = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+    const allowedModels = new Set([
+      ...OFFICIAL_GEMINI_MODELS,
+      settings.geminiModel,
+      ...(Array.isArray(settings.geminiModelPriority) ? settings.geminiModelPriority : []),
+    ].filter(Boolean));
+    if (requestedModel && !allowedModels.has(requestedModel)) {
+      return res.status(400).json({ success: false, error: 'Requested model is not allowlisted.' });
+    }
+    const testModel = requestedModel || settings.geminiModel || 'gemini-2.5-flash';
     const response = await ai.models.generateContent({
       model: testModel,
       contents: 'Respond with exactly the single word: OPERATIONAL',
@@ -3009,7 +3346,7 @@ app.post('/api/admin/test-gemini', async (req, res) => {
 
     await logSystemAction({
       action: 'TEST_GEMINI_PING',
-      actorName: req.body?.actorName || 'Admin',
+      actorName: (req as any).user?.name || 'Admin',
       details: { model: testModel, latencyMs, reply },
     });
 
@@ -3021,10 +3358,11 @@ app.post('/api/admin/test-gemini', async (req, res) => {
       statusText: `Google Gemini API responded successfully using ${testModel}.`,
     });
   } catch (err: any) {
+    console.error('Admin Gemini test error:', err);
     return res.status(500).json({
       success: false,
       latencyMs: Date.now() - startTime,
-      error: err.message || 'Gemini ping failed',
+      error: 'Gemini test failed',
     });
   }
 });
@@ -3041,27 +3379,30 @@ app.get('/api/admin/questions', validate(adminQuestionsQuerySchema), async (req,
     });
     return res.json({ success: true, questions });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin question list error:', err);
   }
 });
 
 // 11. Question Bank Save (POST)
-app.post('/api/admin/questions', async (req, res) => {
+app.post('/api/admin/questions', validate(adminQuestionSchema), async (req, res) => {
   try {
-    const result = await saveQuestionToBank(req.body, req.body?.actorName || 'Admin');
+    const result = await saveQuestionToBank({
+      ...req.body,
+      actorName: (req as any).user?.name || 'Admin',
+    }, (req as any).user?.name || 'Admin');
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin question save error:', err);
   }
 });
 
 // 12. Question Bank Delete (DELETE)
 app.delete('/api/admin/questions/:id', validate(idParamsSchema), async (req, res) => {
   try {
-    const result = await deleteQuestionFromBank(req.params.id, req.body?.actorName || 'Admin');
+    const result = await deleteQuestionFromBank(req.params.id, (req as any).user?.name || 'Admin');
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin question deletion error:', err);
   }
 });
 
@@ -3072,7 +3413,7 @@ app.get('/api/admin/audit-logs', validate(adminAuditLogsQuerySchema), async (req
     const logs = await getAuditLogsFromDb(limit);
     return res.json({ success: true, logs });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Admin audit log error:', err);
   }
 });
 
@@ -3147,7 +3488,7 @@ app.get('/api/models/registry', async (req, res) => {
       },
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Model registry error:', err);
   }
 });
 
@@ -3180,12 +3521,12 @@ app.get('/api/models/bkt', (req, res) => {
       skills,
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'BKT model error:', err);
   }
 });
 
 // 16. BKT Real-Time Tracing Simulation (POST)
-app.post('/api/models/bkt/trace', validate(modelsBktTraceSchema), (req, res) => {
+app.post('/api/models/bkt/trace', verifyToken, requireRole(['student', 'teacher', 'admin', 'institution']), validate(modelsBktTraceSchema), (req, res) => {
   try {
     const { skillName = 'Equation Solving Two or Fewer Steps', answers = [], initialPrior } = req.body;
     const bkt = getBktData();
@@ -3232,7 +3573,8 @@ app.post('/api/models/bkt/trace', validate(modelsBktTraceSchema), (req, res) => 
       steps,
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.error('BKT trace error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to calculate BKT trace' });
   }
 });
 
@@ -3276,7 +3618,7 @@ app.get('/api/models/dag/stats', (req, res) => {
       isCacheWarm: ncertDagLoaded
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'DAG stats error:', err);
   }
 });
 
@@ -3321,7 +3663,7 @@ app.get('/api/models/dag/search', (req, res) => {
       results: matches.slice(0, limit),
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'DAG search error:', err);
   }
 });
 
@@ -3349,7 +3691,7 @@ app.get('/api/models/dag/node/:conceptTitle', (req, res) => {
 
     return res.json({ success: true, node });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'DAG node error:', err);
   }
 });
 
@@ -3404,19 +3746,22 @@ app.get('/api/models/recommendations/:conceptTitle', (req, res) => {
 
     return res.json({ success: true, recommendations: result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return internalServerError(res, 'Recommendation lookup error:', err);
   }
 });
 
 // 19. Socratic Training Corpus Exemplar Search (GET)
-app.get('/api/models/dataset/search', async (req, res) => {
+app.get('/api/models/dataset/search', verifyToken, requireRole(['admin']), async (req, res) => {
+  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_DATASET_SEARCH !== 'true') {
+    return res.status(404).json({ success: false, error: 'Dataset search is disabled' });
+  }
   try {
     const q = ((req.query.q as string) || '').toLowerCase().trim();
     const limit = Math.min(10, Math.max(1, Number(req.query.limit) || 3));
     const trainPath = path.join(process.cwd(), 'models', 'learnx_unified_train.jsonl');
 
     if (!fs.existsSync(trainPath)) {
-      return res.status(404).json({ success: false, error: 'Training dataset file not found on disk' });
+      return res.status(404).json({ success: false, error: 'Dataset unavailable' });
     }
 
     const matches: any[] = [];
@@ -3463,7 +3808,8 @@ app.get('/api/models/dataset/search', async (req, res) => {
       matches,
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    console.error('Dataset search error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to search dataset' });
   }
 });
 
@@ -3474,47 +3820,44 @@ app.use('/api', (req, res) => {
 });
 
 // Vite middleware and static serving
-async function startServer() {
+export async function startServer() {
+  validateProductionConfiguration();
+
   // Connect and initialize MySQL learnx_db tables and baseline seeds
   try {
     const dbOk = await initDatabase();
     if (dbOk) {
       console.log('Successfully connected to XAMPP MySQL (learnx_db)');
     } else {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('Database initialization failed in production');
+      }
       console.warn('Warning: Could not connect to MySQL; running with fallback storage');
     }
   } catch (dbInitErr) {
+    if (process.env.NODE_ENV === 'production') throw dbInitErr;
     console.warn('MySQL init error:', dbInitErr);
   }
 
-  const distPath = path.join(process.cwd(), 'dist');
+  const distPath = path.resolve(process.cwd(), 'dist');
   const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
 
   if (hasDist && process.env.VITE_DEV !== 'true') {
     console.log(`[Static] Serving optimized frontend from: ${distPath}`);
-    app.use(express.static(distPath));
-
-    // Only the homepage and explicit index document are SPA entry points.
-    // robots.txt and sitemap.xml must remain their own crawlable files.
-    const spaRoutes = ['/', '/index.html'];
-
-    app.get('*', (req, res, next) => {
-      if (req.url.startsWith('/api')) {
-        return next();
-      }
-
-      if (spaRoutes.includes(req.url)) {
-        return res.sendFile(path.join(distPath, 'index.html'));
-      }
-
-      const filePath = path.join(distPath, req.url);
-      if (fs.existsSync(filePath)) {
-        return res.sendFile(filePath);
-      }
-
-      return res.status(404).send('Not Found');
-    });
+    // Only explicitly allowlisted frontend files are exposed. Public document
+    // requests are rendered through the anonymous React SSR helper.
+    app.get('*', createStaticAssetHandler(distPath));
   } else {
+    // Keep the development middleware from exposing server bundles or source
+    // maps if those files happen to exist in the workspace.
+    app.use((req, res, next) => {
+      const requestPath = req.originalUrl.split('?')[0] || '/';
+      if (!requestPath.startsWith('/api') && isForbiddenStaticPath(requestPath)) {
+        return res.status(404).send('Not Found');
+      }
+      return next();
+    });
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },

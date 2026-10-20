@@ -21,6 +21,21 @@
     -moz-osx-font-smoothing: grayscale;
     letter-spacing: -0.01em;
     transition: background-color 0.2s ease, color 0.2s ease;
+    overflow-x: hidden;
+  }
+
+  a,
+  button,
+  summary,
+  select,
+  input,
+  textarea {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid #114b43;
+    outline-offset: 2px;
   }
 
   html.dark body {
@@ -32,6 +47,136 @@
     font-family: 'Outfit', sans-serif;
     letter-spacing: -0.025em;
   }
+}
+
+/* Public shell affordances */
+.skip-to-content {
+  position: fixed;
+  left: 1rem;
+  top: 0.75rem;
+  z-index: 100;
+  transform: translateY(-160%);
+  border-radius: 0.625rem;
+  background: #114b43;
+  color: #fff;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  box-shadow: 0 0.5rem 1.5rem rgba(17, 75, 67, 0.25);
+  transition: transform 160ms ease;
+}
+
+.skip-to-content:focus {
+  transform: translateY(0);
+  outline: 2px solid #34d399;
+  outline-offset: 2px;
+}
+
+.learnx-scroll-progress {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 60;
+  height: 3px;
+  pointer-events: none;
+  background: transparent;
+}
+
+.learnx-scroll-progress span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  background: linear-gradient(90deg, #114b43, #34d399);
+  transition: width 80ms linear;
+}
+
+.learnx-loading-ring {
+  display: inline-block;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex: 0 0 auto;
+  border: 2px solid rgba(17, 75, 67, 0.2);
+  border-top-color: #114b43;
+  border-radius: 9999px;
+  animation: learnxSpin 0.8s linear infinite;
+}
+
+@keyframes learnxSpin {
+  to { transform: rotate(360deg); }
+}
+
+.mobile-menu-item {
+  display: inline-flex;
+  min-height: 2.625rem;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  color: #44403c;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: left;
+  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.mobile-menu-item:hover {
+  background: #f5f5f4;
+  color: #114b43;
+}
+
+.mobile-menu-item:focus-visible {
+  outline: 2px solid #114b43;
+  outline-offset: 2px;
+}
+
+.mobile-menu-item:active {
+  transform: translateY(1px);
+}
+
+html.dark .mobile-menu-item:not(.text-white) {
+  color: #d6d3d1;
+}
+
+html.dark .mobile-menu-item:not(.text-white):hover {
+  background: #2b2b28;
+  color: #6ee7b7;
+}
+
+html.dark .learnx-loading-ring {
+  border-color: rgba(52, 211, 153, 0.22);
+  border-top-color: #34d399;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  @page { margin: 1.5cm; }
+  body { background: #fff !important; color: #000 !important; overflow: visible; }
+  header,
+  .learnx-scroll-progress,
+  .skip-to-content,
+  button,
+  [role="dialog"],
+  footer > :not(:first-child),
+  a[aria-label="Contact LearnX"],
+  button[aria-label="Back to top"] {
+    display: none !important;
+  }
+  #app-root, main, section, article, aside {
+    max-width: none !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  a { color: #000 !important; text-decoration: underline; }
+  details { break-inside: avoid; }
+  details:not([open]) > *:not(summary) { display: block; }
 }
 
 /* Font theme overrides */

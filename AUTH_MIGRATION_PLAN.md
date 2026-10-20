@@ -3,7 +3,7 @@
 ## 1. Current State Assessment
 After surveying the frontend components and backend Express routes, the current authentication mechanism comprises:
 - **Login & Registration (Students/Teachers)**: Highly permissive. The `authenticateOrEnrollUser` flow dynamically creates a user or seamlessly authenticates them simply by string-matching an email, name, or ID. No passwords are created or checked for standard users.
-- **Institution Login**: Features a plaintext password check (`if (inst.password === password)`) alongside a hardcoded universal backdoor passkey (`learnx@123`).
+- **Institution Login**: The legacy implementation used plaintext password checks and a shared fallback passkey. That legacy credential has been removed and must not be reintroduced.
 - **Frontend Storage**: The client stores the user's raw JSON profile inside `localStorage.learnx_auth_user` and trusts its contents to grant role-specific UI visibility (e.g., rendering the Admin Dashboard if `role === 'admin'`). 
 - **API Protection**: There are no backend middleware checks. Critical endpoints like `/api/admin/users`, `/api/users/:userId/progress`, and AI capabilities blindly trust the client requests.
 
@@ -44,7 +44,7 @@ After surveying the frontend components and backend Express routes, the current 
 To preserve continuity for existing users who currently log in via just an email/name:
 - **Institutions**: Run a one-time database migration script that hashes their existing plaintext passwords into the new `password_hash` column and drops the old plaintext column.
 - **Students/Teachers**: Implement an "Account Claim" flow. Existing accounts are marked `needs_password = true`. When they attempt to "log in" with just their email/username, the UI instructs them to set a secure password, effectively transitioning them to the required standard.
-- **Demo Passkeys**: The hardcoded `learnx@123` fallback must be obliterated.
+- **Demo Passkeys**: Shared demo passkeys must never be used in deployed environments; development seeds require an explicit local-only secret.
 
 ---
 

@@ -91,6 +91,16 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
     }
   });
 
+  if (!selectedConcept) {
+    return (
+      <div className="rounded-2xl border border-stone-200 bg-white p-6 text-center shadow-xs dark:border-stone-800 dark:bg-[#1C1C1A]">
+        <Layers className="mx-auto mb-2 h-6 w-6 text-stone-400" aria-hidden="true" />
+        <h2 className="font-serif text-base font-semibold text-stone-900 dark:text-stone-100">No curriculum topics available</h2>
+        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Try again after the curriculum has loaded.</p>
+      </div>
+    );
+  }
+
   const getStatusBadge = (status: ConceptNode['status'], score: number) => {
     if (!isLoggedIn) {
       if (status === 'locked') {
@@ -201,9 +211,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
 
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-serif font-semibold text-base text-stone-900 dark:text-stone-100">
+                <h2 className="font-serif font-semibold text-base text-stone-900 dark:text-stone-100">
                   {concepts[0]?.subject || 'Curriculum'} Knowledge Graph
-                </span>
+                </h2>
                 {isLoggedIn ? (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
                     {masteredCount}/{concepts.length} Mastered
@@ -229,8 +239,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
             <div className="flex items-center bg-stone-100 dark:bg-stone-900/90 p-1 rounded-xl border border-stone-200/80 dark:border-stone-800 text-xs text-stone-600 dark:text-stone-300">
               <button
                 id="btn-view-network"
+                type="button"
                 onClick={() => setViewMode('network')}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] ${
                   viewMode === 'network'
                     ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-2xs font-semibold'
                     : 'hover:text-stone-900 dark:hover:text-stone-100 text-stone-500 dark:text-stone-400'
@@ -243,8 +254,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
               </button>
               <button
                 id="btn-view-timeline"
+                type="button"
                 onClick={() => setViewMode('timeline')}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#114B43] ${
                   viewMode === 'timeline'
                     ? 'bg-white dark:bg-stone-800 text-stone-900 dark:text-stone-100 shadow-2xs font-semibold'
                     : 'hover:text-stone-900 dark:hover:text-stone-100 text-stone-500 dark:text-stone-400'
@@ -261,8 +273,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
             {onViewAnalytics && (
               <button
                 id="btn-open-growth-charts"
+                type="button"
                 onClick={onViewAnalytics}
-                className="px-3 py-1.5 bg-[#114B43]/10 hover:bg-[#114B43]/15 text-[#114B43] dark:bg-emerald-950/40 dark:hover:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/60 border border-[#114B43]/30 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-98"
+                className="px-3 py-1.5 bg-[#114B43]/10 hover:bg-[#114B43]/15 text-[#114B43] dark:bg-emerald-950/40 dark:hover:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/60 border border-[#114B43]/30 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-98 focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
                 title="Open detailed graphical progress charts"
               >
                 <TrendingUp className="w-3.5 h-3.5" />
@@ -273,6 +286,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
             {/* Baseline Diagnostic Calibrate Button */}
             <button
               id="btn-run-diagnostic"
+              type="button"
               onClick={() => {
                 if (!isLoggedIn && onOpenAuth) {
                   onOpenAuth('student');
@@ -280,7 +294,7 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
                   onOpenDiagnostic();
                 }
               }}
-              className="px-3.5 py-1.5 bg-stone-900 hover:bg-stone-800 dark:bg-stone-800 dark:hover:bg-stone-700 text-white rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 border border-transparent dark:border-stone-700 shadow-2xs cursor-pointer active:scale-98"
+              className="px-3.5 py-1.5 bg-stone-900 hover:bg-stone-800 dark:bg-stone-800 dark:hover:bg-stone-700 text-white rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 border border-transparent dark:border-stone-700 shadow-2xs cursor-pointer active:scale-98 focus:outline-none focus:ring-2 focus:ring-stone-700 focus:ring-offset-1"
               title="Test your starting level with a quick 2-minute readiness quiz"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-300 dark:text-amber-300" />
@@ -304,8 +318,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
             {onOpenAuth && (
               <button
                 id="btn-guest-banner-signin"
+                type="button"
                 onClick={() => onOpenAuth('student')}
-                className="self-start sm:self-auto px-3.5 py-1.5 rounded-lg bg-[#114B43] hover:bg-[#0D3F38] text-white text-xs font-semibold shadow-2xs transition-all whitespace-nowrap cursor-pointer shrink-0"
+                className="self-start sm:self-auto px-3.5 py-1.5 rounded-lg bg-[#114B43] hover:bg-[#0D3F38] text-white text-xs font-semibold shadow-2xs transition-all whitespace-nowrap cursor-pointer shrink-0 focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-1"
               >
                 Sign In as Student
               </button>
@@ -461,9 +476,18 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
                         key={concept.id}
                         id={`svg-node-${concept.id}`}
                         onClick={() => onSelectConcept(concept.id)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            onSelectConcept(concept.id);
+                          }
+                        }}
                         onMouseEnter={() => setHoveredConceptId(concept.id)}
                         onMouseLeave={() => setHoveredConceptId(null)}
-                        className="cursor-pointer transition-transform duration-200 ease-out"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select concept ${concept.title}`}
+                        className="cursor-pointer transition-transform duration-200 ease-out focus:outline-none"
                         style={{ transformOrigin: `${x}px ${y}px` }}
                       >
                         {/* Outer Glow Halo for Selected Active Node */}
@@ -616,6 +640,15 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
                     key={concept.id}
                     id={`roadmap-item-${concept.id}`}
                     onClick={() => onSelectConcept(concept.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSelectConcept(concept.id);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Select concept ${concept.title}`}
                     whileHover={{ scale: 1.006 }}
                     transition={{ duration: 0.15 }}
                     className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
@@ -699,7 +732,13 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
 
                       <button
                         id={`btn-select-node-${concept.id}`}
-                        className={`p-2 rounded-lg text-xs font-medium flex items-center transition-all ${
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onSelectConcept(concept.id);
+                        }}
+                        aria-label={`Focus on ${concept.title}`}
+                        className={`p-2 rounded-lg text-xs font-medium flex items-center transition-all focus:outline-none focus:ring-2 focus:ring-stone-500 ${
                           isSelected
                             ? 'bg-stone-900 dark:bg-stone-100 text-white dark:text-stone-900'
                             : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700'
@@ -821,8 +860,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
             <div className="space-y-2 pt-1">
               <button
                 id="btn-start-adaptive-lesson"
+                type="button"
                 onClick={() => onStartLesson(selectedConcept.id)}
-                className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0D3F38] text-white rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-2 shadow-2xs cursor-pointer active:scale-98"
+                className="w-full py-2.5 px-4 bg-[#114B43] hover:bg-[#0D3F38] text-white rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-2 shadow-2xs cursor-pointer active:scale-98 focus:outline-none focus:ring-2 focus:ring-[#114B43] focus:ring-offset-2"
               >
                 <PlayCircle className="w-4 h-4" />
                 <span>Launch Micro-Lesson</span>
@@ -830,8 +870,9 @@ export const KnowledgeGraph: React.FC<KnowledgeGraphProps> = ({
 
               <button
                 id="btn-start-adaptive-assessment"
+                type="button"
                 onClick={() => onStartAssessment(selectedConcept.id)}
-                className="w-full py-2.5 px-4 bg-stone-900 hover:bg-stone-800 dark:bg-stone-800 dark:hover:bg-stone-700 text-white rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-2 border border-transparent dark:border-stone-700 shadow-2xs cursor-pointer active:scale-98"
+                className="w-full py-2.5 px-4 bg-stone-900 hover:bg-stone-800 dark:bg-stone-800 dark:hover:bg-stone-700 text-white rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-2 border border-transparent dark:border-stone-700 shadow-2xs cursor-pointer active:scale-98 focus:outline-none focus:ring-2 focus:ring-stone-700 focus:ring-offset-2"
               >
                 <CheckCircle className="w-4 h-4 text-emerald-400" />
                 <span>Take Mastery Check</span>
